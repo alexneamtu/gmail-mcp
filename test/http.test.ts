@@ -32,6 +32,9 @@ test('MCP requires authentication, rejects hostile hosts and exposes OAuth disco
   const as=await(await fetch(origin+'/.well-known/oauth-authorization-server')).json();
   assert.equal(as.issuer,origin);assert.ok(as.code_challenge_methods_supported.includes('S256'));
   assert.equal(as.registration_endpoint,undefined);
+  const expired=await fetch(origin+'/interaction/expired/confirm',{method:'POST',headers:{Origin:origin,'Content-Type':'application/x-www-form-urlencoded'},body:'csrf=expired&decision=allow'});
+  assert.equal(expired.status,400);
+  assert.match(await expired.text(),/Start a new connection/);
  }finally{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));store.close();rmSync(dir,{recursive:true,force:true});}
 });
 

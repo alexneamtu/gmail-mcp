@@ -130,21 +130,39 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     await provider.interactionFinished(req,res,{login:{accountId:login.sub}},{mergeWithLastSubmission:false});
   });
   app.post('/interaction/:uid/confirm',express.urlencoded({extended:false,limit:'4kb'}),async(req,res)=>{
+    res.locals.failureStage='consent_session';
     const interaction=await provider.interactionDetails(req,res);const consent=store.get('Consent',interaction.uid);
+    res.locals.failureStage='consent_validate';
     if(interaction.uid!==req.params.uid||interaction.prompt.name!=='consent'||interaction.session?.accountId!==currentOwner()||!same(consent?.csrf,req.body.csrf)||!store.consume('Consent',interaction.uid))return void res.sendStatus(403);
     if(req.body.decision!=='allow')return void await provider.interactionFinished(req,res,{error:'access_denied'},{mergeWithLastSubmission:false});
+    res.locals.failureStage='consent_grant';
     const grant=interaction.grantId?await provider.Grant.find(interaction.grantId):new provider.Grant({accountId:currentOwner(),clientId:String(interaction.params.client_id)});
     if(!grant)return void res.sendStatus(403);
     const details=interaction.prompt.details as any;
+    res.locals.failureStage='consent_scopes';
     if(details.missingOIDCScope)grant.addOIDCScope(details.missingOIDCScope.join(' '));
     if(details.missingOIDCClaims)grant.addOIDCClaims(details.missingOIDCClaims);
     for(const [indicator,scopes]of Object.entries(details.missingResourceScopes??{})){
       if(indicator!==resource)return void res.sendStatus(403);grant.addResourceScope(indicator,(scopes as string[]).join(' '));
     }
+    res.locals.failureStage='consent_save';
     const grantId=await grant.save();
+    res.locals.failureStage='consent_finish';
     await provider.interactionFinished(req,res,{consent:{grantId}},{mergeWithLastSubmission:true});
   });
   app.use(provider.callback());
-  app.use((_error:unknown,_req:Request,res:Response,_next:NextFunction)=>{if(!res.headersSent)res.status(500).json({error:'request_failed'});});
+  app.use((error:unknown,_req:Request,res:Response,_next:NextFunction)=>{
+    const stages=['consent_session','consent_validate','consent_grant','consent_scopes','consent_save','consent_finish'];
+    const stage=stages.includes(res.locals.failureStage)?res.locals.failureStage:'request';
+    const sessionErrors:Record<string,string>={'interaction session id cookie not found':'interaction_cookie_missing',
+      'interaction session not found':'interaction_expired','session not found':'session_expired','session principal changed':'session_changed'};
+    const sessionError=error instanceof errors.SessionNotFound;
+    const category=sessionError?(sessionErrors[error.error_description??'']??'session_missing'):error instanceof TypeError?'type_error':'internal';
+    console.error(`event=request_failed stage=${stage} category=${category}`);
+    if(!res.headersSent){
+      if(sessionError)res.status(400).send('Login session unavailable. Start a new connection from Claude.');
+      else res.status(500).json({error:'request_failed'});
+    }
+  });
   return {app,provider};
 }
