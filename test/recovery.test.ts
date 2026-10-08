@@ -68,3 +68,18 @@ test('CLI identifies overly permissive private files without exposing paths or c
     await assert.rejects(()=>run(process.execPath,['--import','tsx','src/cli.ts','status'],{env:{...process.env,GMAIL_MCP_CONFIG:file},timeout:10000}),(error:any)=>{assert.match(error.stderr,/private_files_permissions/);assert.doesNotMatch(error.stderr,/SECRET|gmail-permissions-/);return true;});
   }finally{rmSync(dir,{recursive:true,force:true});}
 });
+
+test('Gmail reuses one OAuth client per account until its credentials change',async t=>{
+  const dir=mkdtempSync(join(tmpdir(),'gmail-cache-')),store=new Store(dir,randomBytes(32));
+  store.put('Mailbox','personal',grant);store.put('Settings','desktop',{client_id:'synthetic',client_secret:'SECRET_CLIENT'});
+  const auth=t.mock.method(OAuth2Client.prototype,'getAccessToken',async()=>({token:'SECRET_ACCESS'}));
+  t.mock.method(globalThis,'fetch',async()=>new Response('{}',{status:200}));
+  const gmail=new Gmail(config,store);
+  try{
+    await gmail.request('personal','GET','/profile');await gmail.request('personal','GET','/profile');
+    assert.equal(auth.mock.calls[0]!.this,auth.mock.calls[1]!.this);
+    store.put('Mailbox','personal',{...grant,refreshToken:'SECRET_REFRESH_2'});
+    await gmail.request('personal','GET','/profile');
+    assert.notEqual(auth.mock.calls[2]!.this,auth.mock.calls[1]!.this);
+  }finally{store.close();rmSync(dir,{recursive:true,force:true});}
+});

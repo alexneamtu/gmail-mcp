@@ -23,5 +23,6 @@ Node 24 execution passes. Encryption detects modified records, but does not
 prevent restoring an old authenticated database or deleting rows. Backups must
 be protected; restore requires global revocation before exposure. Key rotation
 requires all writers stopped. Encrypted grant tombstones prevent stale writers
-from recreating a revoked grant. Secondary lookups scan decrypted model rows,
+from recreating a revoked grant; they expire after 31 days, beyond the
+30-day grant lifetime. Secondary lookups scan decrypted model rows,
 an intentional single-user performance tradeoff.

@@ -1,7 +1,7 @@
 import {gmailScopes,type Config} from './config.js';
 import type {Store} from './store.js';
 
-export type AccountState='missing'|'disabled'|'identity_mismatch'|'scope_mismatch'|'enrolled'|'unchecked';
+export type AccountState='missing'|'disabled'|'identity_mismatch'|'scope_mismatch'|'enrolled';
 export interface AccountStatus {state:AccountState;enrolled:boolean;remoteValidity:'unchecked';nextAction:string}
 export function accountStatus(config:Config,store:Store,account:string):AccountStatus{
   const mailbox=store.get('Mailbox',account);

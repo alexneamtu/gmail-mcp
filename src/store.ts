@@ -6,6 +6,8 @@ import {OperationError} from './errors.js';
 
 export type Payload = Record<string, any>;
 type RecordValue = { id: string; data: Payload; expires: number | null };
+// Revocation markers only block stale in-flight writers; grants live at most 30 days.
+const REVOKED_TTL = 31 * 86400;
 
 export function readPrivateFile(path: string): Buffer {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -105,16 +107,18 @@ export class Store {
         expires: ttl === undefined ? null : Math.floor(Date.now()/1000) + ttl });
     });
   }
-  get(model: string, id: string): Payload | undefined {
-    const record = this.raw(model, id);
+  private live(model: string, record: RecordValue | undefined): Payload | undefined {
     if (!record || (record.expires !== null && record.expires <= Date.now()/1000)) return undefined;
-    const grant = model === 'Grant' ? id : record.data.grantId;
+    const grant = model === 'Grant' ? record.id : record.data.grantId;
     if (grant && this.raw('Revoked', grant)) return undefined;
     return record.data;
   }
+  get(model: string, id: string): Payload | undefined {
+    return this.live(model, this.raw(model, id));
+  }
   all(model: string): Array<{ id: string; data: Payload }> {
     return this.db.prepare('SELECT * FROM records WHERE model=?').all(model).flatMap(row => {
-      const record = this.decode(row)!; const data = this.get(model, record.id);
+      const record = this.decode(row)!; const data = this.live(model, record);
       return data ? [{ id: record.id, data }] : [];
     });
   }
@@ -136,7 +140,7 @@ export class Store {
   }
   revokeGrant(grant: string): void {
     this.transaction(() => {
-      this.write('Revoked', {id: grant, data: {}, expires: null});
+      this.write('Revoked', {id: grant, data: {}, expires: Math.floor(Date.now()/1000) + REVOKED_TTL});
       for (const row of this.db.prepare('SELECT * FROM records').all()) {
         const record = this.decode(row)!;
         if ((row.model === 'Grant' && record.id === grant) || record.data.grantId === grant) this.delete(String(row.model), record.id);
@@ -148,7 +152,7 @@ export class Store {
       for (const row of this.db.prepare('SELECT * FROM records').all()) {
         const record = this.decode(row)!;
         const grant = row.model === 'Grant' ? record.id : record.data.grantId;
-        if (grant) this.write('Revoked', {id: grant, data: {}, expires: null});
+        if (grant) this.write('Revoked', {id: grant, data: {}, expires: Math.floor(Date.now()/1000) + REVOKED_TTL});
       }
       this.db.exec("DELETE FROM records WHERE model NOT IN ('Settings','Mailbox','Revoked')");
     });
