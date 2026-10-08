@@ -1,0 +1,10 @@
+{
+  "origin": "https://mcp.example.com",
+  "ownerEmail": "owner@example.com",
+  "accounts": {
+    "personal": "owner@example.com",
+    "work": "owner@example.org"
+  },
+  "access": "full",
+  "port": 8787
+}

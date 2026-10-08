@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "tsc",
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
     "start": "node dist/main.js",
     "admin": "tsx src/cli.ts"

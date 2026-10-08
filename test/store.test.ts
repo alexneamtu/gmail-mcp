@@ -47,3 +47,86 @@ test('a wrong key fails authentication of stored data', () => {
     assert.throws(() => new Store(dir, randomBytes(32)), /key|decrypt|auth/i);
   } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('rejects non-finite TTL and a missing key sentinel over existing records', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-store-'));
+  const key = randomBytes(32); const store = new Store(dir, key);
+  try {
+    assert.throws(() => store.put('Code','bad',{},NaN), /TTL/);
+    assert.throws(() => store.put('Code','bad',{},Infinity), /TTL/);
+    store.put('Mailbox','account',{secret:'synthetic'}); store.close();
+    const raw = new DatabaseSync(join(dir,'state.db')); raw.exec('DELETE FROM meta'); raw.close();
+    assert.throws(() => new Store(dir,key), /sentinel|authenticate/i);
+  } finally { store.close(); rmSync(dir,{recursive:true,force:true}); }
+});
+
+test('secondary lookup ignores expired matches and refuses duplicate live matches', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-store-')); const store = new Store(dir,randomBytes(32));
+  try {
+    store.put('Session','old',{uid:'shared'},-1); store.put('Session','new',{uid:'shared',value:2},60);
+    assert.equal(store.find('Session','uid','shared')?.value,2);
+    store.put('Session','duplicate',{uid:'shared'},60);
+    assert.throws(() => store.find('Session','uid','shared'), /Ambiguous/);
+  } finally {store.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('revoked grants cannot be resurrected by stale writers', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-store-')); const store = new Store(dir,randomBytes(32));
+  try {
+    store.put('Grant','g',{},60);store.revokeGrant('g');
+    assert.throws(() => store.put('Grant','g',{},60), /revoked/);
+    assert.throws(() => store.put('AccessToken','token',{grantId:'g'},60), /revoked/);
+  } finally {store.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('data-key rotation preserves state and invalidates the old key',()=>{
+ const dir=mkdtempSync(join(tmpdir(),'gmail-store-'));const oldKey=randomBytes(32),newKey=randomBytes(32);let store=new Store(dir,oldKey);
+ try{
+  store.put('Mailbox','personal',{refreshToken:'synthetic'});store.put('AuthorizationCode','code',{},60);store.consume('AuthorizationCode','code');
+  store.rekey(newKey);store.close();assert.throws(()=>new Store(dir,oldKey),/authenticate/);
+  store=new Store(dir,newKey);assert.equal(store.get('Mailbox','personal')?.refreshToken,'synthetic');assert.equal(store.consume('AuthorizationCode','code'),false);
+ }finally{store.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('rejects an incompatible schema without retaining database handles',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');const {readdirSync,readlinkSync,chmodSync}=await import('node:fs');
+ const dir=mkdtempSync(join(tmpdir(),'gmail-store-'));const path=join(dir,'state.db');
+ try{
+  const raw=new DatabaseSync(path);raw.exec('CREATE TABLE records (model TEXT)');raw.close();chmodSync(path,0o600);
+  const count=()=>readdirSync('/proc/self/fd').filter(fd=>{try{return readlinkSync('/proc/self/fd/'+fd)===path;}catch{return false;}}).length;
+  const before=count();for(let i=0;i<3;i++)assert.throws(()=>new Store(dir,randomBytes(32)),/schema/i);
+  assert.equal(count(),before);
+ }finally{rmSync(dir,{recursive:true,force:true});}
+});
+
+test('modified ciphertext and substitution between records fail authentication',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');
+ const dir=mkdtempSync(join(tmpdir(),'gmail-tamper-'));const store=new Store(dir,randomBytes(32));
+ const raw=new DatabaseSync(join(dir,'state.db'));
+ try{
+  store.put('Mailbox','first',{secret:'one'});store.put('Mailbox','second',{secret:'two'});
+  const rows=raw.prepare('SELECT id,payload FROM records WHERE model=?').all('Mailbox') as Array<{id:string,payload:Uint8Array}>;
+  const payload=Buffer.from(rows[0]!.payload);payload[payload.length-1]=payload[payload.length-1]!^1;
+  raw.prepare('UPDATE records SET payload=? WHERE id=?').run(payload,rows[0]!.id);
+  assert.throws(()=>store.all('Mailbox'),/auth|decrypt/i);
+  raw.prepare('UPDATE records SET payload=? WHERE id=?').run(rows[1]!.payload,rows[0]!.id);
+  assert.throws(()=>store.all('Mailbox'),/auth|decrypt/i);
+ }finally{raw.close();store.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('separate processes serialize initialization and consumption under an exclusive lock',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');const {execFile}=await import('node:child_process');
+ const {promisify}=await import('node:util');const {pathToFileURL}=await import('node:url');const {resolve}=await import('node:path');
+ const dir=mkdtempSync(join(tmpdir(),'gmail-concurrent-')),key=randomBytes(32);const store=new Store(dir,key);
+ const raw=new DatabaseSync(join(dir,'state.db'));
+ try{
+  store.put('AuthorizationCode','one-time',{},60);raw.exec('BEGIN EXCLUSIVE');
+  const program=`import {Store} from ${JSON.stringify(pathToFileURL(resolve('src/store.ts')).href)};
+   const store=new Store(process.argv[1],Buffer.from(process.argv[2],'hex'));
+   console.log(store.consume('AuthorizationCode','one-time'));store.close();`;
+  const child=()=>promisify(execFile)(process.execPath,['--import','tsx','--input-type=module','-e',program,dir,key.toString('hex')],{timeout:10000});
+  const first=child(),second=child();await new Promise(r=>setTimeout(r,500));raw.exec('COMMIT');
+  const results=await Promise.all([first,second]);assert.deepEqual(results.map(r=>r.stdout.trim()).sort(),['false','true']);
+ }finally{raw.close();store.close();rmSync(dir,{recursive:true,force:true});}
+});

@@ -1,0 +1,38 @@
+[Unit]
+Description=Personal Gmail MCP connector
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=gmail-mcp
+Group=gmail-mcp
+WorkingDirectory=/opt/gmail-mcp/app
+ExecStart=/opt/gmail-mcp/node/bin/node /opt/gmail-mcp/app/dist/main.js
+Environment=NODE_ENV=production
+Environment=GMAIL_MCP_CONFIG=/etc/gmail-mcp/config.json
+Environment=GMAIL_MCP_KEY=/etc/gmail-mcp/master.key
+Environment=GMAIL_MCP_STATE=/var/lib/gmail-mcp
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+UMask=0077
+StateDirectory=gmail-mcp
+StateDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+LimitCORE=0
+MemoryMax=512M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

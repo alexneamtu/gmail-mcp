@@ -1,71 +1,162 @@
 # Gmail MCP
 
-Self-hosted, single-user Gmail MCP service for Claude, under construction.
+Self-hosted Gmail connector for one Google owner and multiple mailbox aliases.
+One Streamable HTTP endpoint at `/mcp`; every tool requires `account`.
 
-The current implementation contains the encrypted state store and its tests.
-The HTTP endpoint, OAuth provider, Gmail tools, enrollment CLI and deployment
-are still pending. Do not deploy this checkout yet.
-The initial store also has [known issues](docs/storage-review.md) to resolve
-before OAuth integration.
+Tools: list accounts, search, read messages, list labels, create drafts, and,
+when enabled, send existing drafts and apply/remove labels. Forwarded mail is
+read through its destination mailbox; forwarding does not enable sending aliases.
+Plain-text bodies are preferred; HTML-only bodies return labelled, untrusted HTML
+text. Bodies are capped at 60,000 characters with explicit truncation indicators.
 
-## Intended configuration
+## Setup
 
-- One HTTPS endpoint, for example `https://mcp.example.com/mcp`.
-- One explicitly configured owner identity, for example `owner@example.com`.
-- Multiple Gmail accounts, each selected by a required `account` alias.
-- Configurable access: read and drafts, or read, drafts, send and apply labels.
-  Full access uses `https://www.googleapis.com/auth/gmail.modify`.
+Use **Node 24**. Run `npm ci --ignore-scripts`, `npm test`, `npm run check`, and
+`npm run build`. Tests use synthetic accounts and never send email. The HTTP
+suite includes an actual MCP Inspector CLI connection.
 
-Example account aliases:
+Create a dedicated Google Cloud project and enable Gmail API. In Google Auth
+Platform configure External audience, app/support/contact information, authorized
+domain and real home/privacy/terms URLs. The server supplies `/`, `/privacy`, and
+`/terms`. Publish to **In production** before enrollment, avoiding seven-day
+refresh-token expiry in Testing. Personal use may remain unverified; Workspace
+administrators may need to allow it.
 
-| Alias | Gmail address |
-| --- | --- |
-| personal | owner@example.com |
-| work | owner@example.org |
+Add `openid`, `https://www.googleapis.com/auth/userinfo.email`, and the Gmail
+scope(s). Full mode needs only `https://www.googleapis.com/auth/gmail.modify`.
+Drafts mode uses `gmail.readonly` plus `gmail.compose`; Google's compose scope can
+also send, but the server omits its send tool in drafts mode.
 
-Addresses that forward into a Gmail inbox are read through that inbox's account
-alias. Forwarding alone does not configure an outgoing Gmail identity.
+Create two Google OAuth clients:
 
-## Development
+- **Desktop app**, marked for AI-agent use, for mailbox enrollment.
+- **Web application**, for interactive owner sign-in, with exactly
+  `https://mcp.example.com/login/google/callback` as redirect URI. Use your real
+  domain. Leave JavaScript origins empty.
 
-Use Node.js 24 or newer.
+Save the client JSON files outside Git with mode `0600` in a `0700` directory.
+Google shows new client secrets only at creation. Create
+`~/.config/gmail-mcp/config.json` from [the example](deploy/config.example.json),
+also `0600`. Then run:
 
 ```sh
-npm ci --ignore-scripts
-npm test
-npm run check
-npm run build
+node dist/cli.js init /private/google-desktop.json /private/google-web.json
+node dist/cli.js enroll-owner
+node dist/cli.js enroll personal
+node dist/cli.js enroll work
+node dist/cli.js status
 ```
 
-Credentials, encryption keys and runtime state must live outside this checkout.
-The store requires a private directory and a 32-byte encryption key. It encrypts
-record contents with AES-256-GCM and hashes lookup IDs with HMAC-SHA256.
+The CLI encrypts credentials/state in `~/.local/share/gmail-mcp/state.db`, using
+`~/.config/gmail-mcp/master.key`. Original JSON files remain private recovery
+copies. Never commit them. For enrollment from another computer, leave this
+running there and open the printed Google URL on that same computer:
 
-## Implementation status
+```sh
+ssh -N -L 18888:127.0.0.1:18888 <ssh-user>@<server>
+```
 
-- [x] Research MCP authorization, Claude connectors and candidate projects.
-- [x] Approve a custom TypeScript server using the official MCP SDK and oidc-provider.
-- [x] Implement and test the initial encrypted state store.
-- [ ] Resolve the storage review findings and add regression coverage.
-- [ ] Implement Gmail tools, OAuth, HTTP and the enrollment CLI.
-- [ ] Create Google OAuth clients and authorize each account in a browser.
-- [ ] Approve and install systemd, TLS and public ingress configuration.
-- [ ] Verify with MCP Inspector and Claude using searches and drafts only.
-- [ ] Complete operational instructions for accounts, rotation, revocation and updates.
+Select the expected Google account and approve. Sessions last ten minutes.
+Identity, verified email, state, nonce and PKCE are checked. You can close the
+SSH tunnel after all enrollments succeed.
 
-Deployment instructions must account for existing services and preserve intended
-LAN and VPN access. Verification uses synthetic messages and drafts; never send
-email during tests.
+## Deployment
 
-## Public repository policy
+Review [install.sh](deploy/install.sh), then run it as root with four arguments:
+built checkout, Node 24 installation directory, private config directory and
+state directory. Stop enrollment processes first. It refuses to overwrite an
+existing installation. It creates a non-login `gmail-mcp` system user and a
+[hardened systemd service](deploy/gmail-mcp.service), listening only on
+`127.0.0.1:8787`, with restart on failure.
 
-Keep domains, owner identities, mailbox addresses, forwarding rules and host
-paths in private configuration outside the repository. Examples use reserved
-`example.com` and `example.org` names. Tests use synthetic data. Do not commit
-OAuth client files, keys, tokens, state databases, request logs or real email.
+Installed code/runtime: `/opt/gmail-mcp`. Config/key: `/etc/gmail-mcp`.
+Encrypted state: `/var/lib/gmail-mcp/state.db`. Secrets/state are owned by the
+service account, files `0600`, directories `0700`. Code is root-owned and
+read-only to the service. Original enrollment state remains a private backup;
+use the installed admin command thereafter, not the development CLI defaults.
 
-Before making the repository public, inspect the complete Git history and other
-GitHub content for private deployment details. Sanitizing current files does not
-remove earlier versions. Select a distribution license before a public release.
+Publish the configured hostname through an existing Cloudflare tunnel with
+origin `http://127.0.0.1:8787`. Cloudflare supplies edge HTTPS and encrypted tunnel
+transit; the final hop stays on loopback. Preserve the public Host and forwarded
+HTTPS scheme. Disable caching and request logging for this hostname. Do not put
+an interactive Cloudflare Access gate in front of OAuth/MCP. Information pages
+and discovery are public; all mailbox tools require OAuth.
 
-Design and implementation plan are in [docs/superpowers](docs/superpowers).
+The installer does not alter firewall/router/tunnel configuration. A tunnel
+requires no new inbound ports. On a shared host, preserve existing services,
+LAN and VPN access. Preserving existing public-port exceptions does not establish
+an exact 22/80/443-only ingress policy; audit that separately.
+
+## Operations
+
+Use `sudo gmail-mcp-admin status` after installation. The wrapper selects the
+service's config, key and database.
+
+- **Add account:** `sudoedit /etc/gmail-mcp/config.json`, add alias/email, run
+  `sudo gmail-mcp-admin enroll <alias>`, then restart `gmail-mcp`.
+- **Re-auth:** repeat `enroll <alias>` with the SSH forwarding above. Changing an
+  existing alias's identity requires removal first. `enroll-owner` pins or
+  re-enables the configured owner.
+- **Remove:** run `sudo gmail-mcp-admin remove <alias>`, then remove the config
+  entry and restart. Removal disables access before revoking Google permission;
+  failure retains the encrypted credential for retry. Revoking a Google grant
+  can affect other clients for the same user/project. Remove backup copies
+  separately. Requests already in flight may finish.
+- **Revoke MCP access immediately:** `sudo gmail-mcp-admin revoke-all`. This
+  revokes grants and disables owner login. Mailbox grants remain enrolled;
+  `enroll-owner` re-enables future logins. To revoke Google access too, remove
+  each mailbox and revoke the app in Google Account → Third-party connections.
+  Stop the service for a complete shutdown.
+- **Rotate signing/cookie secrets:** stop the service, run
+  `sudo gmail-mcp-admin rotate-secrets`, start it and reconnect Claude.
+- **Rotate encryption key:** stop the service and all admin processes; run
+  `sudo gmail-mcp-admin rotate-key --service-stopped`; start and verify. Protect
+  retained `master.key.previous` and `state.db.before-key-rotation` backups.
+  A crash before the key rename can leave `master.key.next` matching the new
+  database. Recover a matched key/database pair while stopped. Remove obsolete
+  copies only after verification. After restoring old state, run `revoke-all`
+  before exposure: encryption does not prevent backup rollback.
+- **Rotate Google secrets:** create replacements in Google Console, save new
+  JSON securely, stop the service and import both files with `init` as the
+  service user. Verify login/refresh before disabling old secrets. New client
+  IDs require re-enrollment. The source files must be readable by `gmail-mcp`.
+- **Update:** review/pull changes; run `npm ci --ignore-scripts`, tests, typechecks and build with
+  Node 24. Stop the service and back up its matched state/key privately. Replace
+  `/opt/gmail-mcp/app` with the built `dist`, `public`, `node_modules`,
+  `package.json` and README, owned by root. Restart and verify health, rejection
+  of unauthenticated MCP calls and an authenticated search. Roll back code if
+  needed; never overwrite live state during a code-only update.
+
+Logs contain fixed event names, not request URLs, subjects, bodies or tokens.
+Avoid proxy access logs, HTTP debug tracing, crash dumps and shell tracing for
+secret operations. Check `journalctl -u gmail-mcp` for startup/failure events.
+
+## Connect Claude
+
+Open **Customize → Connectors → Add → Custom → Web**. Some versions call this
+**Add custom connector**. Enter a name and `https://mcp.example.com/mcp` with your
+real domain. Continue with **Sign in now** and **Use your own OAuth client**.
+Set client ID to **`claude-gmail`**, leave client secret blank, and add no fixed
+Authorization header. Add/connect, sign in as the configured Google owner,
+and approve the connector's account permissions. Enable it in the chat menu.
+
+This is the connector's OAuth client, not either Google client ID. It uses code
+flow with mandatory PKCE S256 and the sole registered callback
+`https://claude.ai/api/mcp/auth_callback`. Dynamic registration and published
+client identity are not enabled. Tokens require the configured owner, resource,
+scope and an active grant. Refresh tokens rotate; replay revokes their grant.
+
+Verify in Claude: call `list_accounts` with a known alias, search every alias,
+and create a clearly marked draft. Never send during validation. Local Inspector
+success does not prove the production Google-to-Claude OAuth flow.
+
+References: [Claude connectors](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp),
+[Google audience](https://support.google.com/cloud/answer/15549945),
+[Google clients](https://support.google.com/cloud/answer/15549257).
+
+## Future public repository
+
+Keep real domains, identities, host paths, credentials, state and live test
+results outside Git. Before changing visibility, audit the **entire history**
+and GitHub content for private details. Sanitizing current files does not remove
+older versions. Choose a license before public release.
