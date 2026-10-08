@@ -69,6 +69,7 @@ test('owner-only browser flow issues audience-bound tokens, serves MCP, and reje
    if(location){response=await browser(location);continue;}
    const html=await response.text();assert.equal(response.status,200,html);
    assert.equal(response.headers.get('referrer-policy'),'same-origin','Consent form must preserve its same-origin POST Origin');
+   assert.match(response.headers.get('content-security-policy')??'',/form-action 'self' https:\/\/claude\.ai\/api\/mcp\/auth_callback;/,'Consent CSP must permit the OAuth redirect back to Claude');
    const csrf=html.match(/name="csrf" value="([^"]+)"/)?.[1];const action=html.match(/action="([^"]+)"/)?.[1];
    assert.ok(csrf&&action,html);
    const denied=await browser(action,{method:'POST',headers:{Origin:'null','Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf,decision:'allow'})});

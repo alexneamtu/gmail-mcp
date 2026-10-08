@@ -109,7 +109,9 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     if(interaction.prompt.name!=='consent'||interaction.session?.accountId!==currentOwner())return void res.sendStatus(403);
     const csrf=random();store.put('Consent',interaction.uid,{csrf},600);
     // no-referrer makes browser form POSTs send Origin: null, failing the Origin guard.
-    res.set('Referrer-Policy','same-origin');
+    res.set({'Referrer-Policy':'same-origin',
+      // Browsers also enforce form-action on the OAuth redirect after this form submits.
+      'Content-Security-Policy':`default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${CLAUDE_CALLBACK}; frame-ancestors 'none'; base-uri 'none'`});
     res.type('html').send(`<h1>Authorize Gmail access</h1><p>Allow Claude to use ${escape(Object.keys(config.accounts).join(', '))} with ${config.access==='full'?'read, draft, send and label':'read and draft'} access?</p><form method="post" action="/interaction/${escape(interaction.uid)}/confirm"><input type="hidden" name="csrf" value="${csrf}"><button name="decision" value="allow">Allow</button> <button name="decision" value="deny">Deny</button></form>`);
   });
   app.get('/login/google/callback',async(req,res)=>{
