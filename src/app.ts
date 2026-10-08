@@ -14,6 +14,8 @@ const same=(a:unknown,b:unknown)=>typeof a==='string'&&typeof b==='string'&&Buff
 const escape=(s:string)=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 export const CLIENT_ID='claude-gmail';
 export const CLAUDE_CALLBACK='https://claude.ai/api/mcp/auth_callback';
+export const CODEX_CLIENT_ID='codex-gmail';
+export const CODEX_CALLBACK='http://127.0.0.1:18989/callback';
 
 export function initializeProviderSecrets(store:Store):void {
   if(!store.get('Settings','provider')){
@@ -46,7 +48,9 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
   const configuration:Configuration={
     adapter:Adapter,jwks:settings.jwks,cookies:{keys:settings.cookieKeys,long:{secure,sameSite:'lax',httpOnly:true},short:{secure,sameSite:'lax',httpOnly:true}},
     clients:[{client_id:CLIENT_ID,client_name:'Personal Gmail connector',redirect_uris:[CLAUDE_CALLBACK],
-      response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'}],
+      response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
+      {client_id:CODEX_CLIENT_ID,client_name:'Codex Gmail connector',application_type:'native',redirect_uris:[CODEX_CALLBACK],
+        response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'}],
     scopes:['openid','offline_access','mcp'],pkce:{required:()=>true},rotateRefreshToken:true,
     issueRefreshToken:()=>true,
     ttl:{AccessToken:300,AuthorizationCode:60,RefreshToken:30*86400,Session:3600,Interaction:600,Grant:30*86400},
@@ -108,11 +112,14 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     }
     if(interaction.prompt.name!=='consent'||interaction.session?.accountId!==currentOwner())return void res.sendStatus(403);
     const csrf=random();store.put('Consent',interaction.uid,{csrf},600);
+    const clientName=interaction.params.client_id===CODEX_CLIENT_ID?'Codex':'Claude';
+    // The provider has already validated this registered client's exact callback (native loopback ports may vary).
+    const callback=String(interaction.params.redirect_uri);
     // no-referrer makes browser form POSTs send Origin: null, failing the Origin guard.
     res.set({'Referrer-Policy':'same-origin',
       // Browsers also enforce form-action on the OAuth redirect after this form submits.
-      'Content-Security-Policy':`default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${CLAUDE_CALLBACK}; frame-ancestors 'none'; base-uri 'none'`});
-    res.type('html').send(`<h1>Authorize Gmail access</h1><p>Allow Claude to use ${escape(Object.keys(config.accounts).join(', '))} with ${config.access==='full'?'read, draft, send and label':'read and draft'} access?</p><form method="post" action="/interaction/${escape(interaction.uid)}/confirm"><input type="hidden" name="csrf" value="${csrf}"><button name="decision" value="allow">Allow</button> <button name="decision" value="deny">Deny</button></form>`);
+      'Content-Security-Policy':`default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${callback}; frame-ancestors 'none'; base-uri 'none'`});
+    res.type('html').send(`<h1>Authorize Gmail access</h1><p>Allow ${clientName} to use ${escape(Object.keys(config.accounts).join(', '))} with ${config.access==='full'?'read, draft, send and label':'read and draft'} access?</p><form method="post" action="/interaction/${escape(interaction.uid)}/confirm"><input type="hidden" name="csrf" value="${csrf}"><button name="decision" value="allow">Allow</button> <button name="decision" value="deny">Deny</button></form>`);
   });
   app.get('/login/google/callback',async(req,res)=>{
     const state=typeof req.query.state==='string'?req.query.state:'';const code=typeof req.query.code==='string'?req.query.code:'';

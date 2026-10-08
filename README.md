@@ -141,7 +141,7 @@ Authorization header. Add/connect, sign in as the configured Google owner,
 and approve the connector's account permissions. Enable it in the chat menu.
 
 This is the connector's OAuth client, not either Google client ID. It uses code
-flow with mandatory PKCE S256 and the sole registered callback
+flow with mandatory PKCE S256 and its registered callback
 `https://claude.ai/api/mcp/auth_callback`. Dynamic registration and published
 client identity are not enabled. Tokens require the configured owner, resource,
 scope and an active grant. Refresh tokens rotate; replay revokes their grant.
@@ -153,6 +153,35 @@ success does not prove the production Google-to-Claude OAuth flow.
 References: [Claude connectors](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp),
 [Google audience](https://support.google.com/cloud/answer/15549945),
 [Google clients](https://support.google.com/cloud/answer/15549257).
+
+## Connect Codex
+
+The separate public OAuth client `codex-gmail` uses the same owner-only Google
+login and PKCE checks. Add the following to `~/.codex/config.toml`, substituting
+your domain. Preserve existing settings:
+
+```toml
+[mcp_servers.gmail]
+url = "https://mcp.example.com/mcp"
+scopes = ["mcp", "offline_access"]
+
+[mcp_servers.gmail.oauth]
+client_id = "codex-gmail"
+callback_url = "http://127.0.0.1:18989/callback"
+callback_port = 18989
+```
+
+Run `codex mcp login gmail`. For headless login, use
+`codex mcp login gmail --no-browser` and follow its callback instructions.
+Keep authorization codes and callback URLs out of chat and logs. Alternatively,
+forward port 18989 over SSH from the browser's computer to the Codex host.
+Restart your Codex session after setup and verify `list_accounts` and a search.
+No Google Console changes or mailbox re-enrollment are needed. The native
+client accepts loopback callback ports according to RFC 8252; the callback host
+and path remain restricted. `codex mcp logout gmail` removes local authorization.
+Server-side `revoke-all` revokes both Claude and Codex access.
+
+Reference: [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
 
 ## Future public repository
 

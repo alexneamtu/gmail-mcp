@@ -32,13 +32,20 @@ test('MCP requires authentication, rejects hostile hosts and exposes OAuth disco
   const as=await(await fetch(origin+'/.well-known/oauth-authorization-server')).json();
   assert.equal(as.issuer,origin);assert.ok(as.code_challenge_methods_supported.includes('S256'));
   assert.equal(as.registration_endpoint,undefined);
+  for(const [clientId,redirect] of [['codex-gmail','https://evil.example/callback'],['codex-gmail','http://127.0.0.1:18989/wrong'],['claude-gmail','http://127.0.0.1:18989/callback']]){
+   const rejected=await fetch(origin+'/authorize?'+new URLSearchParams({client_id:clientId!,redirect_uri:redirect!,response_type:'code',scope:'mcp',code_challenge:'x'.repeat(43),code_challenge_method:'S256'}),{redirect:'manual'});
+   assert.equal(rejected.status,400);assert.equal(rejected.headers.get('location'),null);
+  }
   const expired=await fetch(origin+'/interaction/expired/confirm',{method:'POST',headers:{Origin:origin,'Content-Type':'application/x-www-form-urlencoded'},body:'csrf=expired&decision=allow'});
   assert.equal(expired.status,400);
   assert.match(await expired.text(),/Start a new connection/);
  }finally{server.closeAllConnections();await new Promise<void>(r=>server.close(()=>r()));store.close();rmSync(dir,{recursive:true,force:true});}
 });
 
-test('owner-only browser flow issues audience-bound tokens, serves MCP, and rejects refresh replay',async()=>{
+for(const client of [
+ {id:'claude-gmail',name:'Claude',callback:'https://claude.ai/api/mcp/auth_callback'},
+ {id:'codex-gmail',name:'Codex',callback:'http://127.0.0.1:18989/callback'},
+]) test(`${client.name}: owner-only browser flow issues audience-bound tokens, serves MCP, and rejects refresh replay`,async()=>{
  const {createHash}=await import('node:crypto');
  const dir=mkdtempSync(join(tmpdir(),'gmail-oauth-'));const store=new Store(dir,randomBytes(32));
  store.put('Settings','owner',{email:'owner@example.com',sub:'owner-sub'});initializeProviderSecrets(store);
@@ -56,7 +63,7 @@ test('owner-only browser flow issues audience-bound tokens, serves MCP, and reje
   return response;
  }
  const verifier=randomBytes(32).toString('base64url');
- const authorize=()=>'/authorize?'+new URLSearchParams({client_id:'claude-gmail',redirect_uri:'https://claude.ai/api/mcp/auth_callback',response_type:'code',scope:'mcp offline_access',resource:origin+'/mcp',state:'client-state',code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256'});
+ const authorize=()=>'/authorize?'+new URLSearchParams({client_id:client.id,redirect_uri:client.callback,response_type:'code',scope:'mcp offline_access',resource:origin+'/mcp',state:'client-state',code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256'});
  async function login(code:string){
   let response=await browser(authorize());assert.equal(response.status,303);
   response=await browser(response.headers.get('location')!);assert.equal(response.status,303);
@@ -65,11 +72,12 @@ test('owner-only browser flow issues audience-bound tokens, serves MCP, and reje
   if(code!=='owner'){assert.equal(response.status,403);return undefined;}
   for(let i=0;i<8;i++){
    const location=response.headers.get('location');
-   if(location?.startsWith('https://claude.ai/'))return new URL(location).searchParams.get('code');
+   if(location?.startsWith(client.callback+'?')){assert.equal(new URL(location).searchParams.get('iss'),origin);return new URL(location).searchParams.get('code');}
    if(location){response=await browser(location);continue;}
    const html=await response.text();assert.equal(response.status,200,html);
    assert.equal(response.headers.get('referrer-policy'),'same-origin','Consent form must preserve its same-origin POST Origin');
-   assert.match(response.headers.get('content-security-policy')??'',/form-action 'self' https:\/\/claude\.ai\/api\/mcp\/auth_callback;/,'Consent CSP must permit the OAuth redirect back to Claude');
+   assert.ok((response.headers.get('content-security-policy')??'').includes(`form-action 'self' ${client.callback};`),'Consent CSP must permit this client callback');
+   assert.ok(html.includes(`Allow ${client.name} to use`));
    const csrf=html.match(/name="csrf" value="([^"]+)"/)?.[1];const action=html.match(/action="([^"]+)"/)?.[1];
    assert.ok(csrf&&action,html);
    const denied=await browser(action,{method:'POST',headers:{Origin:'null','Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf,decision:'allow'})});
@@ -80,12 +88,12 @@ test('owner-only browser flow issues audience-bound tokens, serves MCP, and reje
   }
   throw new Error('OAuth flow did not complete');
  }
- async function token(fields:Record<string,string>){return fetch(origin+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:'claude-gmail',resource:origin+'/mcp',...fields})});}
+ async function token(fields:Record<string,string>){return fetch(origin+'/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:client.id,resource:origin+'/mcp',...fields})});}
  async function mcp(access:string,method:string,params:any={}){return fetch(origin+'/mcp',{method:'POST',headers:{Authorization:'Bearer '+access,'Content-Type':'application/json',Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-11-25'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params})});}
  try{
   await login('intruder');cookies.clear();
   const code=await login('owner');assert.ok(code);
-  const exchange=await token({grant_type:'authorization_code',code,code_verifier:verifier,redirect_uri:'https://claude.ai/api/mcp/auth_callback'});
+  const exchange=await token({grant_type:'authorization_code',code,code_verifier:verifier,redirect_uri:client.callback});
   const tokens=await exchange.json();assert.equal(exchange.status,200,JSON.stringify(tokens));assert.ok(tokens.refresh_token);
   const init=await mcp(tokens.access_token,'initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}});
   assert.equal(init.status,200,await init.text());
@@ -102,7 +110,7 @@ test('owner-only browser flow issues audience-bound tokens, serves MCP, and reje
   const replay=await token({grant_type:'refresh_token',refresh_token:tokens.refresh_token});assert.equal(replay.status,400);
   assert.equal((await mcp(next.access_token,'tools/list')).status,401);
   cookies.clear();const concurrentCode=await login('owner');assert.ok(concurrentCode);
-  const redeem=()=>token({grant_type:'authorization_code',code:concurrentCode,code_verifier:verifier,redirect_uri:'https://claude.ai/api/mcp/auth_callback'});
+  const redeem=()=>token({grant_type:'authorization_code',code:concurrentCode,code_verifier:verifier,redirect_uri:client.callback});
   const exchanges=await Promise.all([redeem(),redeem()]);
   assert.equal(exchanges.filter(r=>r.status===200).length<=1,true);
   assert.ok(exchanges.some(r=>r.status===400));
