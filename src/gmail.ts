@@ -60,7 +60,8 @@ export class Gmail implements GmailApi {
         }else await response.body?.cancel().catch(()=>{});
         throw new OperationError(code);
       }
-      return await readJson(response,2_000_000);
+      // Base64 JSON for a 5 MB attachment stays below this bound.
+      return await readJson(response,8_000_000);
     }catch(error){
       if(error instanceof OperationError)throw write&&error.code==='response_too_large'?new OperationError('write_outcome_unknown'):error;
       throw new OperationError(write?'write_outcome_unknown':'upstream_unavailable');

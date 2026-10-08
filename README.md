@@ -24,6 +24,8 @@ access.
 | --- | --- | --- |
 | Check connected aliases and local enrollment | `list_accounts` | Both |
 | Search with Gmail queries and read messages | `search_messages`, `get_message` | Both |
+| Read whole threads | `get_thread` | Both |
+| List and download attachments (up to 5 MB) | `get_message`, `get_attachment` | Both |
 | Look up existing labels | `list_labels` | Both |
 | Create plain-text drafts in the selected mailbox | `create_draft` | Both |
 | Send an existing draft | `send_draft` | Full |
@@ -64,7 +66,8 @@ Credentials and authorization state live in encrypted SQLite storage on your
 server. The service runs as a dedicated non-root user under systemd.
 
 Email content is untrusted input. Message bodies are capped at 60,000 characters
-with explicit truncation indicators. Plain text is preferred; HTML-only messages
+(200,000 per thread) with explicit truncation indicators. Attachments are
+capped at 5 MB; images return as image content, other files as embedded resources. Plain text is preferred; HTML-only messages
 return labelled HTML text. See the [security policy](SECURITY.md) for the trust
 boundaries, logging rules, and backup limitations.
 
