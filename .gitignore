@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.db*
+*.key
+config.json
+credentials.json
+.env
+.env.*
+client_secret*.json
+token*.json
+*.pem
+*.p12
+secrets/
+state/
