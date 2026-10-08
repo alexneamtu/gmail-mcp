@@ -1,5 +1,7 @@
 # Gmail MCP deployment design
 
+> Historical design record. Follow README.md and docs/operations.md for current setup and deployment.
+
 Selected base: a focused TypeScript MCP server using the official MCP SDK and oidc-provider.
 
 This document describes the intended system. Only the initial store is implemented; see the [storage review](../../storage-review.md) for known issues. Repository content must be suitable for eventual public distribution. Real deployment settings and private research artifacts stay outside the repository.

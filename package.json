@@ -11,7 +11,8 @@
     "check": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
     "start": "node dist/main.js",
-    "admin": "tsx src/cli.ts"
+    "admin": "tsx src/cli.ts",
+    "start:setup": "node dist/public-main.js"
   },
   "dependencies": {
     "@googleapis/gmail": "22.0.1",
@@ -33,5 +34,6 @@
     "@types/oidc-provider": "9.12.1",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
-  }
+  },
+  "license": "MIT"
 }

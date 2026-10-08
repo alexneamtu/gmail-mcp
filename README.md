@@ -9,7 +9,15 @@ read through its destination mailbox; forwarding does not enable sending aliases
 Plain-text bodies are preferred; HTML-only bodies return labelled, untrusted HTML
 text. Bodies are capped at 60,000 characters with explicit truncation indicators.
 
+Early release for technically experienced self-hosters. Requires Node 24 and a
+Linux/systemd host. Read the [security policy](SECURITY.md) before operating it.
+Licensed under [MIT](LICENSE).
+
 ## Setup
+
+Start with the [step-by-step setup guide](docs/setup.md), including the
+information-only bootstrap server needed before Google OAuth enrollment.
+The overview below is a reference for returning operators.
 
 For CLI usage, run `node dist/cli.js --help` after building. Help works before
 configuration or credentials exist.
@@ -32,7 +40,7 @@ also send, but the server omits its send tool in drafts mode.
 
 Create two Google OAuth clients:
 
-- **Desktop app**, marked for AI-agent use, for mailbox enrollment.
+- **Desktop app**, for mailbox enrollment.
 - **Web application**, for interactive owner sign-in, with exactly
   `https://mcp.example.com/login/google/callback` as redirect URI. Use your real
   domain. Leave JavaScript origins empty.
@@ -148,12 +156,9 @@ CLI validation and enrollment failures use the same fixed-message policy.
   JSON securely, stop the service and import both files with `init` as the
   service user. Verify login/refresh before disabling old secrets. New client
   IDs require re-enrollment. The source files must be readable by `gmail-mcp`.
-- **Update:** review/pull changes; run `npm ci --ignore-scripts`, tests, typechecks and build with
-  Node 24. Stop the service and back up its matched state/key privately. Replace
-  `/opt/gmail-mcp/app` with the built `dist`, `public`, `node_modules`,
-  `package.json` and README, owned by root. Restart and verify health, rejection
-  of unauthenticated MCP calls and an authenticated search. Roll back code if
-  needed; never overwrite live state during a code-only update.
+- **Update/rollback:** use the [copyable operations guide](docs/operations.md).
+  It stages code, preserves the previous application and backs up matched state
+  while stopped. A code rollback does not restore old authorization state.
 
 Logs contain fixed event names, not request URLs, subjects, bodies or tokens.
 Avoid proxy access logs, HTTP debug tracing, crash dumps and shell tracing for
@@ -215,9 +220,13 @@ Server-side `revoke-all` revokes both Claude and Codex access.
 
 Reference: [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
 
-## Future public repository
+## Contributing and release hygiene
 
 Keep real domains, identities, host paths, credentials, state and live test
 results outside Git. Before changing visibility, audit the **entire history**
 and GitHub content for private details. Sanitizing current files does not remove
-older versions. Choose a license before public release.
+older versions. Use synthetic fixtures for tests and never send real mail in CI.
+Run `npm test`, `npm run check`, and `npm run build` before submitting a change.
+See [SECURITY.md](SECURITY.md) for private reporting; use public issues only for
+non-sensitive bugs and feature requests. `private: true` in package.json prevents
+accidental npm publication; it does not restrict the MIT source license.
