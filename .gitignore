@@ -12,3 +12,6 @@ token*.json
 *.p12
 secrets/
 state/
+private/
+*.local.json
+*.log
