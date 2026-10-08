@@ -11,6 +11,7 @@ import {promisify} from 'node:util';
 import {Store} from '../src/store.js';
 import {parseConfig} from '../src/config.js';
 import {createApp,initializeProviderSecrets} from '../src/app.js';
+import {OperationError} from '../src/errors.js';
 
 test('MCP requires authentication, rejects hostile hosts and exposes OAuth discovery',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'gmail-http-'));const store=new Store(dir,randomBytes(32));
@@ -52,7 +53,7 @@ for(const client of [
  const server=createServer();server.listen(0,'127.0.0.1');await once(server,'listening');
  const origin=`http://127.0.0.1:${(server.address() as any).port}`;
  const config=parseConfig({origin,ownerEmail:'owner@example.com',accounts:{personal:'owner@example.com'},access:'full'});
- const {app}=createApp(config,store,{async request(_a,method,path){assert.notEqual(path,'/drafts/send');return path==='/drafts'?{id:'synthetic-draft'}:{messages:[]};}}, {
+ const {app}=createApp(config,store,{async request(_a,method,path,_body,query){if(query?.q==='synthetic-rate-limit')throw new OperationError('rate_limited');if(query?.q==='synthetic-unknown-error')throw new Error('SECRET_UPSTREAM');assert.notEqual(path,'/drafts/send');return path==='/drafts'?{id:'synthetic-draft'}:{messages:[]};}}, {
   start(state,nonce,challenge){return 'https://accounts.google.com/fake?'+new URLSearchParams({state,nonce,challenge});},
   async finish(code){return code==='owner'?{email:'owner@example.com',sub:'owner-sub'}:{email:'intruder@example.com',sub:'intruder'};}
  });server.on('request',app);
@@ -69,7 +70,7 @@ for(const client of [
   response=await browser(response.headers.get('location')!);assert.equal(response.status,303);
   const google=new URL(response.headers.get('location')!);
   response=await browser('/login/google/callback?'+new URLSearchParams({code,state:google.searchParams.get('state')!}));
-  if(code!=='owner'){assert.equal(response.status,403);return undefined;}
+  if(code!=='owner'){assert.equal(response.status,403);assert.match(await response.text(),/owner account/i);return undefined;}
   for(let i=0;i<8;i++){
    const location=response.headers.get('location');
    if(location?.startsWith(client.callback+'?')){assert.equal(new URL(location).searchParams.get('iss'),origin);return new URL(location).searchParams.get('code');}
@@ -78,6 +79,9 @@ for(const client of [
    assert.equal(response.headers.get('referrer-policy'),'same-origin','Consent form must preserve its same-origin POST Origin');
    assert.ok((response.headers.get('content-security-policy')??'').includes(`form-action 'self' ${client.callback};`),'Consent CSP must permit this client callback');
    assert.ok(html.includes(`Allow ${client.name} to use`));
+   assert.match(html,/<html lang="en">/);assert.match(html,/<title>Authorize Gmail access/);
+   assert.match(html,/name="viewport"/);assert.match(html,/<main/);assert.match(html,/owner@example.com/);
+   assert.match(html,/href="\/privacy"/);assert.match(html,/send email/i);
    const csrf=html.match(/name="csrf" value="([^"]+)"/)?.[1];const action=html.match(/action="([^"]+)"/)?.[1];
    assert.ok(csrf&&action,html);
    const denied=await browser(action,{method:'POST',headers:{Origin:'null','Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf,decision:'allow'})});
@@ -98,6 +102,12 @@ for(const client of [
   const init=await mcp(tokens.access_token,'initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'test',version:'1'}});
   assert.equal(init.status,200,await init.text());
   const listed=await(await mcp(tokens.access_token,'tools/list')).json();assert.ok(listed.result.tools.some((t:any)=>t.name==='create_draft'),JSON.stringify(listed));
+  const accounts=await(await mcp(tokens.access_token,'tools/call',{name:'list_accounts',arguments:{account:'personal'}})).json();
+  const account=JSON.parse(accounts.result.content[0].text)[0];assert.equal(account.state,'missing');assert.equal(account.remoteValidity,'unchecked');
+  for(const [query,expected] of [['synthetic-rate-limit','rate_limited'],['synthetic-unknown-error','operation_failed']]){
+   const result=await(await mcp(tokens.access_token,'tools/call',{name:'search_messages',arguments:{account:'personal',query}})).json();
+   assert.equal(result.result.isError,true);const failure=JSON.parse(result.result.content[0].text);assert.equal(failure.code,expected);assert.equal(failure.account,'personal');assert.doesNotMatch(JSON.stringify(result),/SECRET_UPSTREAM/);
+  }
   const inspected=await promisify(execFile)(process.execPath,['node_modules/@modelcontextprotocol/inspector/clients/cli/build/index.js',
     origin+'/mcp','--client-config',join(dir,'client.json'),
     '--method','tools/list','--format','json','--quiet','--stored-auth-only','--header','Authorization: Bearer '+tokens.access_token],

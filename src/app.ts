@@ -7,11 +7,12 @@ import type {Config} from './config.js';
 import {MailTools,type GmailApi} from './tools.js';
 import {GoogleIdentity,type Identity} from './identity.js';
 import {publicPages} from './public-pages.js';
+import {accountStatus} from './accounts.js';
+import {consentPage,authorizationError} from './ui.js';
 
 const random=()=>randomBytes(32).toString('base64url');
 const digest=(s:string)=>createHash('sha256').update(s).digest('base64url');
 const same=(a:unknown,b:unknown)=>typeof a==='string'&&typeof b==='string'&&Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
-const escape=(s:string)=>s.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]!));
 export const CLIENT_ID='claude-gmail';
 export const CLAUDE_CALLBACK='https://claude.ai/api/mcp/auth_callback';
 export const CODEX_CLIENT_ID='codex-gmail';
@@ -60,7 +61,7 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     routes:{authorization:'/authorize',token:'/token',revocation:'/revoke',jwks:'/jwks'},
     interactions:{url:(_ctx,interaction)=>`/interaction/${interaction.uid}`},
     findAccount:(_ctx,id)=>id===currentOwner()?{accountId:id,async claims(){return {sub:id};}}:undefined,
-    renderError:async ctx=>{ctx.type='text/plain';ctx.body='Authorization failed. Start a new connection.';},
+    renderError:async ctx=>{ctx.type='html';ctx.body=authorizationError('Authorization failed. Start a new connection using the configured client and callback.');},
   };
   const provider=new Provider(config.origin,configuration);provider.proxy=true;
   provider.on('server_error',()=>{});
@@ -95,7 +96,7 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
   };
   app.all('/mcp',guard);
   app.post('/mcp',express.json({limit:'256kb'}),async(req,res)=>{
-    const server=new MailTools(config,api).server();
+    const server=new MailTools(config,api,account=>accountStatus(config,store,account)).server();
     const transport=new NodeStreamableHTTPServerTransport({sessionIdGenerator:undefined,enableJsonResponse:true});
     res.on('close',()=>{void transport.close();void server.close();});
     await server.connect(transport);await transport.handleRequest(req,res,req.body);
@@ -103,7 +104,7 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
   app.all('/mcp',(_req,res)=>res.set('Allow','POST').sendStatus(405));
   app.get('/interaction/:uid',async(req,res)=>{
     const interaction=await provider.interactionDetails(req,res);
-    if(interaction.uid!==req.params.uid||!currentOwner())return void res.sendStatus(403);
+    if(interaction.uid!==req.params.uid||!currentOwner())return void res.status(403).type('html').send(authorizationError('Owner login is unavailable. Check owner enrollment and whether connector access was revoked.'));
     if(interaction.prompt.name==='login'){
       const state=random(),nonce=random(),verifier=random(),binding=random();
       store.put('GoogleLogin',state,{uid:interaction.uid,nonce,verifier,binding:digest(binding)},600);
@@ -119,7 +120,7 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     res.set({'Referrer-Policy':'same-origin',
       // Browsers also enforce form-action on the OAuth redirect after this form submits.
       'Content-Security-Policy':`default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${callback}; frame-ancestors 'none'; base-uri 'none'`});
-    res.type('html').send(`<h1>Authorize Gmail access</h1><p>Allow ${clientName} to use ${escape(Object.keys(config.accounts).join(', '))} with ${config.access==='full'?'read, draft, send and label':'read and draft'} access?</p><form method="post" action="/interaction/${escape(interaction.uid)}/confirm"><input type="hidden" name="csrf" value="${csrf}"><button name="decision" value="allow">Allow</button> <button name="decision" value="deny">Deny</button></form>`);
+    res.type('html').send(consentPage(config,clientName,interaction.uid,csrf));
   });
   app.get('/login/google/callback',async(req,res)=>{
     const state=typeof req.query.state==='string'?req.query.state:'';const code=typeof req.query.code==='string'?req.query.code:'';
@@ -127,10 +128,10 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     if(!login||!binding||!same(login.binding,digest(binding))||!code||!store.consume('GoogleLogin',state))return void res.sendStatus(403);
     try{
       const user=await google.finish(code,login.verifier,login.nonce);
-      if(user.email!==config.ownerEmail||user.sub!==currentOwner())return void res.sendStatus(403);
+      if(user.email!==config.ownerEmail||user.sub!==currentOwner())return void res.status(403).type('html').send(authorizationError('Sign in with the configured owner account. Other Google accounts cannot authorize this connector.'));
       store.put('CompletedLogin',login.uid,{sub:user.sub,binding:login.binding},120);
       res.redirect(303,`/interaction/${login.uid}/finish`);
-    }catch{res.status(403).send('Owner sign-in failed. Start a new connection.');}
+    }catch{res.status(403).type('html').send(authorizationError('Owner sign-in failed. Choose the configured owner account and complete Google verification.'));}
   });
   app.get('/interaction/:uid/finish',async(req,res)=>{
     const interaction=await provider.interactionDetails(req,res);const login=store.get('CompletedLogin',interaction.uid);const binding=cookie(req);
@@ -169,7 +170,7 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     const category=sessionError?(sessionErrors[error.error_description??'']??'session_missing'):error instanceof TypeError?'type_error':'internal';
     console.error(`event=request_failed stage=${stage} category=${category}`);
     if(!res.headersSent){
-      if(sessionError)res.status(400).send('Login session unavailable. Start a new connection from Claude.');
+      if(sessionError)res.status(400).type('html').send(authorizationError('Login session unavailable. Start a new connection from your MCP client.'));
       else res.status(500).json({error:'request_failed'});
     }
   });

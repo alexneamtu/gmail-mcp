@@ -11,6 +11,9 @@ text. Bodies are capped at 60,000 characters with explicit truncation indicators
 
 ## Setup
 
+For CLI usage, run `node dist/cli.js --help` after building. Help works before
+configuration or credentials exist.
+
 Use **Node 24**. Run `npm ci --ignore-scripts`, `npm test`, `npm run check`, and
 `npm run build`. Tests use synthetic accounts and never send email. The HTTP
 suite includes an actual MCP Inspector CLI connection.
@@ -56,6 +59,11 @@ running there and open the printed Google URL on that same computer:
 ssh -N -L 18888:127.0.0.1:18888 <ssh-user>@<server>
 ```
 
+Use the same computer for the browser and the SSH command. A browser running on
+the server itself needs no tunnel. Opening the Google URL on a phone alone cannot
+complete enrollment; phone-only enrollment is currently unsupported. The CLI
+names the alias being enrolled, and the callback page confirms that alias.
+
 Select the expected Google account and approve. Sessions last ten minutes.
 Identity, verified email, state, nonce and PKCE are checked. You can close the
 SSH tunnel after all enrollments succeed.
@@ -90,7 +98,27 @@ an exact 22/80/443-only ingress policy; audit that separately.
 ## Operations
 
 Use `sudo gmail-mcp-admin status` after installation. The wrapper selects the
-service's config, key and database.
+service's config, key and database. `status` and the `list_accounts` tool inspect
+local enrollment only; they never contact Google. Each account includes:
+
+| State | Meaning and next action |
+| --- | --- |
+| `missing` | No usable local credential. Enroll this alias. |
+| `disabled` | Removal/revocation is pending. Retry removal; re-enroll only to deliberately restore access. |
+| `identity_mismatch` | Configuration differs from the stored account. Restore it or remove the old enrollment first. |
+| `scope_mismatch` | The stored grant lacks the configured permissions. Re-enroll and approve them. |
+| `enrolled` | Local grant exists. Remote validity is still unchecked; verify with a read-only search. |
+
+`enrolled` is true only for the last state; `remoteValidity` remains `unchecked`.
+A previously revoked Google token cannot be diagnosed by this local-only command.
+
+Tool failures return a safe error `code`, a recovery message and, when validated,
+the account alias. `reauth_required` means re-enroll that alias; `rate_limited`
+means wait; `quota_exceeded` calls for checking project quota limits;
+`permission_denied` calls for checking scopes or Workspace policy.
+`write_outcome_unknown` means Gmail may already have performed the write: inspect
+Gmail before retrying. Raw Google error bodies and credentials are never returned.
+CLI validation and enrollment failures use the same fixed-message policy.
 
 - **Add account:** `sudoedit /etc/gmail-mcp/config.json`, add alias/email, run
   `sudo gmail-mcp-admin enroll <alias>`, then restart `gmail-mcp`.
@@ -108,7 +136,7 @@ service's config, key and database.
   each mailbox and revoke the app in Google Account → Third-party connections.
   Stop the service for a complete shutdown.
 - **Rotate signing/cookie secrets:** stop the service, run
-  `sudo gmail-mcp-admin rotate-secrets`, start it and reconnect Claude.
+  `sudo gmail-mcp-admin rotate-secrets`, start it and reconnect Claude and Codex.
 - **Rotate encryption key:** stop the service and all admin processes; run
   `sudo gmail-mcp-admin rotate-key --service-stopped`; start and verify. Protect
   retained `master.key.previous` and `state.db.before-key-rotation` backups.
@@ -145,6 +173,10 @@ flow with mandatory PKCE S256 and its registered callback
 `https://claude.ai/api/mcp/auth_callback`. Dynamic registration and published
 client identity are not enabled. Tokens require the configured owner, resource,
 scope and an active grant. Refresh tokens rotate; replay revokes their grant.
+Connector grants expire 30 days after creation. Refreshing tokens does not extend
+that grant: reconnect and approve again when it expires. This is separate from
+Google mailbox enrollment; working Gmail grants do not need re-enrollment just
+because connector consent expires.
 
 Verify in Claude: call `list_accounts` with a known alias, search every alias,
 and create a clearly marked draft. Never send during validation. Local Inspector

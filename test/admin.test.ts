@@ -27,7 +27,7 @@ test('failed removal blocks mailbox access while retaining credentials for a rev
     await assert.rejects(run);
     assert.equal(store.get('Mailbox','personal')?.refreshToken,'synthetic-refresh');
     assert.equal(store.get('Mailbox','personal')?.disabled,true);
-    await assert.rejects(()=>new Gmail(config,store).request('personal','GET','/profile'),/enrollment/);
+    await assert.rejects(()=>new Gmail(config,store).request('personal','GET','/profile'),(error:any)=>error.code==='account_disabled');
     writeFileSync(shim,prefix+'OAuth2Client.prototype.revokeToken=async()=>({});');
     await run();assert.equal(store.get('Mailbox','personal'),undefined);
   }finally{store.close();rmSync(dir,{recursive:true,force:true});}

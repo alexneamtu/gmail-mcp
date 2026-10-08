@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes } from 'node:crypto';
 import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {OperationError} from './errors.js';
 
 export type Payload = Record<string, any>;
 type RecordValue = { id: string; data: Payload; expires: number | null };
@@ -10,7 +11,7 @@ export function readPrivateFile(path: string): Buffer {
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = fstatSync(fd);
-    if (!stat.isFile() || (stat.mode & 0o077) !== 0) throw new Error('Credential file must be private');
+    if (!stat.isFile() || (stat.mode & 0o077) !== 0) throw new OperationError('private_files_permissions');
     return readFileSync(fd);
   } finally { closeSync(fd); }
 }
