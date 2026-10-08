@@ -1,6 +1,6 @@
 # Gmail MCP
 
-**Your Gmail accounts, together in Claude and Codex.**
+![Gmail MCP: your Gmail accounts, together in Claude and Codex. Three mailboxes connect through one server.](docs/assets/hero.png)
 
 [![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Node 24](https://img.shields.io/badge/Node.js-24-417E38?logo=nodedotjs&logoColor=white)](package.json)
