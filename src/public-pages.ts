@@ -3,8 +3,10 @@ import {fileURLToPath} from 'node:url';
 
 export function publicPages(){
   const router=express.Router({caseSensitive:true,strict:true});
+  // root confines send's dotfile check to the file name; otherwise checkouts under ~/.dir 404.
+  const root=fileURLToPath(new URL('../public/',import.meta.url));
   for(const [route,file] of [['/','index.html'],['/privacy','privacy.html'],['/terms','terms.html']]){
-    router.get(route!,(_req,res)=>res.sendFile(fileURLToPath(new URL('../public/'+file,import.meta.url))));
+    router.get(route!,(_req,res)=>res.sendFile(file!,{root}));
   }
   return router;
 }

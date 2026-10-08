@@ -14,6 +14,8 @@ async function readJson(response:Response,limit:number):Promise<any>{
 }
 
 export class Gmail implements GmailApi {
+  // One client per account reuses access tokens until expiry; replaced when credentials change.
+  private clients=new Map<string,{key:string;client:OAuth2Client}>();
   constructor(private config:Config,private store:Store){}
   async request(account:string,method:string,path:string,body?:unknown,query:Record<string,string>={}):Promise<any> {
     if(!Object.hasOwn(this.config.accounts,account))throw new OperationError('invalid_arguments');
@@ -21,8 +23,14 @@ export class Gmail implements GmailApi {
     if(state!=='enrolled')throw new OperationError(state==='disabled'?'account_disabled':state==='identity_mismatch'?'identity_mismatch':state==='scope_mismatch'?'scope_mismatch':'reauth_required');
     const mailbox=this.store.get('Mailbox',account)!;
     const credentials=this.store.get('Settings','desktop');if(!credentials)throw new OperationError('configuration_error');
-    const client=new OAuth2Client(credentials.client_id,credentials.client_secret);
-    client.setCredentials({refresh_token:mailbox.refreshToken});
+    const key=JSON.stringify([credentials.client_id,credentials.client_secret,mailbox.refreshToken]);
+    let cached=this.clients.get(account);
+    if(cached?.key!==key){
+      const client=new OAuth2Client({clientId:credentials.client_id,clientSecret:credentials.client_secret,transporterOptions:{timeout:20000}});
+      client.setCredentials({refresh_token:mailbox.refreshToken});
+      cached={key,client};this.clients.set(account,cached);
+    }
+    const client=cached.client;
     let token:string|null|undefined;
     try{({token}=await client.getAccessToken());}
     catch(error:any){

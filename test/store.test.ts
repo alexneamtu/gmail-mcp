@@ -130,3 +130,31 @@ test('separate processes serialize initialization and consumption under an exclu
   const results=await Promise.all([first,second]);assert.deepEqual(results.map(r=>r.stdout.trim()).sort(),['false','true']);
  }finally{raw.close();store.close();rmSync(dir,{recursive:true,force:true});}
 });
+
+test('revocation tombstones expire after outliving the grant lifetime', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-store-'));
+  const store = new Store(dir, randomBytes(32));
+  try {
+    store.put('Grant', 'g', {}, 60); store.revokeGrant('g');
+    assert.throws(() => store.put('Grant', 'g', {}, 60), /revoked/);
+    const now = Date.now();
+    t.mock.method(Date, 'now', () => now + 32 * 86400 * 1000);
+    store.prune();
+    store.put('Grant', 'g', {}, 60);
+    assert.deepEqual(store.get('Grant', 'g'), {});
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('failed rotation keeps the previous key usable', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-store-'));
+  const oldKey = randomBytes(32); let store = new Store(dir, oldKey);
+  try {
+    store.put('Mailbox', 'personal', { refreshToken: 'synthetic' });
+    t.mock.method(store as any, 'write', () => { throw new Error('synthetic crash'); });
+    assert.throws(() => store.rekey(randomBytes(32)), /synthetic crash/);
+    t.mock.restoreAll();
+    assert.equal(store.get('Mailbox', 'personal')?.refreshToken, 'synthetic');
+    store.close(); store = new Store(dir, oldKey);
+    assert.equal(store.get('Mailbox', 'personal')?.refreshToken, 'synthetic');
+  } finally { store.close(); rmSync(dir, { recursive: true, force: true }); }
+});

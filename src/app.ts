@@ -64,7 +64,7 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     renderError:async ctx=>{ctx.type='html';ctx.body=authorizationError('Authorization failed. Start a new connection using the configured client and callback.');},
   };
   const provider=new Provider(config.origin,configuration);provider.proxy=true;
-  provider.on('server_error',()=>{});
+  provider.on('server_error',()=>console.error('event=oidc_server_error'));
   const app=express();app.disable('x-powered-by');app.set('trust proxy','loopback');
   const loginCookie=secure?'__Host-gmail-login':'gmail-login';
   const cookie=(req:Request)=>req.headers.cookie?.split(';').map(x=>x.trim()).find(x=>x.startsWith(loginCookie+'='))?.slice(loginCookie.length+1);
@@ -83,16 +83,21 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
   app.get(['/.well-known/oauth-protected-resource/mcp','/.well-known/oauth-protected-resource'],(_req,res)=>res.json(metadata));
   app.use(publicPages());
   const guard=async(req:Request,res:Response,next:NextFunction)=>{
+    const deny=()=>{
+      res.set('WWW-Authenticate',`Bearer resource_metadata="${config.origin}/.well-known/oauth-protected-resource/mcp"`);
+      res.status(401).json({error:'unauthorized'});
+    };
     try{
       const value=req.headers.authorization?.match(/^Bearer ([A-Za-z0-9_-]{16,2048})$/)?.[1];
       const token=value?await provider.AccessToken.find(value):undefined;
       const grant=token?.grantId?await provider.Grant.find(token.grantId):undefined;
-      if(!token||!grant||token.accountId!==currentOwner()||grant.accountId!==currentOwner()||token.aud!==resource||!token.scope?.split(' ').includes('mcp')){
-        res.set('WWW-Authenticate',`Bearer resource_metadata="${config.origin}/.well-known/oauth-protected-resource/mcp"`);
-        return void res.status(401).json({error:'unauthorized'});
-      }
+      const owner=currentOwner();
+      if(!token||!grant||!owner)return void deny();
+      if(token.accountId!==owner||grant.accountId!==owner)return void deny();
+      if(token.aud!==resource)return void deny();
+      if(!token.scope?.split(' ').includes('mcp'))return void deny();
       next();
-    }catch{res.set('WWW-Authenticate',`Bearer resource_metadata="${config.origin}/.well-known/oauth-protected-resource/mcp"`);res.status(401).json({error:'unauthorized'});}
+    }catch{deny();}
   };
   app.all('/mcp',guard);
   app.post('/mcp',express.json({limit:'256kb'}),async(req,res)=>{
@@ -125,7 +130,9 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
   app.get('/login/google/callback',async(req,res)=>{
     const state=typeof req.query.state==='string'?req.query.state:'';const code=typeof req.query.code==='string'?req.query.code:'';
     const login=store.get('GoogleLogin',state);const binding=cookie(req);
-    if(!login||!binding||!same(login.binding,digest(binding))||!code||!store.consume('GoogleLogin',state))return void res.sendStatus(403);
+    if(!login||!binding||!same(login.binding,digest(binding)))return void res.sendStatus(403);
+    if(!code)return void res.sendStatus(403);
+    if(!store.consume('GoogleLogin',state))return void res.sendStatus(403);
     try{
       const user=await google.finish(code,login.verifier,login.nonce);
       if(user.email!==config.ownerEmail||user.sub!==currentOwner())return void res.status(403).type('html').send(authorizationError('Sign in with the configured owner account. Other Google accounts cannot authorize this connector.'));
@@ -134,16 +141,24 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     }catch{res.status(403).type('html').send(authorizationError('Owner sign-in failed. Choose the configured owner account and complete Google verification.'));}
   });
   app.get('/interaction/:uid/finish',async(req,res)=>{
-    const interaction=await provider.interactionDetails(req,res);const login=store.get('CompletedLogin',interaction.uid);const binding=cookie(req);
-    if(interaction.uid!==req.params.uid||interaction.prompt.name!=='login'||!login||!binding||!same(login.binding,digest(binding))||login.sub!==currentOwner()||!store.consume('CompletedLogin',interaction.uid))return void res.sendStatus(403);
+    const interaction=await provider.interactionDetails(req,res);
+    const login=store.get('CompletedLogin',interaction.uid);const binding=cookie(req);
+    if(interaction.uid!==req.params.uid||interaction.prompt.name!=='login')return void res.sendStatus(403);
+    if(!login||!binding||!same(login.binding,digest(binding)))return void res.sendStatus(403);
+    if(login.sub!==currentOwner())return void res.sendStatus(403);
+    if(!store.consume('CompletedLogin',interaction.uid))return void res.sendStatus(403);
     res.clearCookie(loginCookie,{secure,httpOnly:true,sameSite:'lax',path:'/'});
     await provider.interactionFinished(req,res,{login:{accountId:login.sub}},{mergeWithLastSubmission:false});
   });
   app.post('/interaction/:uid/confirm',express.urlencoded({extended:false,limit:'4kb'}),async(req,res)=>{
     res.locals.failureStage='consent_session';
-    const interaction=await provider.interactionDetails(req,res);const consent=store.get('Consent',interaction.uid);
+    const interaction=await provider.interactionDetails(req,res);
+    const consent=store.get('Consent',interaction.uid);
     res.locals.failureStage='consent_validate';
-    if(interaction.uid!==req.params.uid||interaction.prompt.name!=='consent'||interaction.session?.accountId!==currentOwner()||!same(consent?.csrf,req.body.csrf)||!store.consume('Consent',interaction.uid))return void res.sendStatus(403);
+    if(interaction.uid!==req.params.uid||interaction.prompt.name!=='consent')return void res.sendStatus(403);
+    if(interaction.session?.accountId!==currentOwner())return void res.sendStatus(403);
+    if(!same(consent?.csrf,req.body.csrf))return void res.sendStatus(403);
+    if(!store.consume('Consent',interaction.uid))return void res.sendStatus(403);
     if(req.body.decision!=='allow')return void await provider.interactionFinished(req,res,{error:'access_denied'},{mergeWithLastSubmission:false});
     res.locals.failureStage='consent_grant';
     const grant=interaction.grantId?await provider.Grant.find(interaction.grantId):new provider.Grant({accountId:currentOwner(),clientId:String(interaction.params.client_id)});
