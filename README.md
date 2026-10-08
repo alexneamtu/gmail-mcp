@@ -1,23 +1,89 @@
 # Gmail MCP
 
-Self-hosted Gmail connector for one Google owner and multiple mailbox aliases.
-One Streamable HTTP endpoint at `/mcp`; every tool requires `account`.
+**Your Gmail accounts, together in Claude and Codex.**
 
-Tools: list accounts, search, read messages, list labels, create drafts, and,
-when enabled, send existing drafts and apply/remove labels. Forwarded mail is
-read through its destination mailbox; forwarding does not enable sending aliases.
-Plain-text bodies are preferred; HTML-only bodies return labelled, untrusted HTML
-text. Bodies are capped at 60,000 characters with explicit truncation indicators.
+[![MIT license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Node 24](https://img.shields.io/badge/Node.js-24-417E38?logo=nodedotjs&logoColor=white)](package.json)
+[![Streamable HTTP](https://img.shields.io/badge/MCP-Streamable_HTTP-555555)](#how-it-works)
 
-Early release for technically experienced self-hosters. Requires Node 24 and a
-Linux/systemd host. Read the [security policy](SECURITY.md) before operating it.
-Licensed under [MIT](LICENSE).
+Search, read, and draft across personal and work Gmail accounts through one
+self-hosted MCP endpoint. Choose which accounts to connect and whether to enable
+sending and label changes. Only your configured Google identity can authorize
+access.
+
+[Get started](docs/setup.md) · [Connect Claude](#connect-claude) · [Connect Codex](#connect-codex) · [Operations](#operations) · [CI](https://github.com/alexneamtu/gmail-mcp/actions/workflows/ci.yml)
+
+> [!NOTE]
+> Early release for technically experienced self-hosters. Requires Node 24,
+> Linux with systemd, an HTTPS hostname, and your own Google OAuth project.
+> Each deployment supports one owner with multiple Gmail accounts.
+
+## What you can do
+
+| Capability | Tools | Access mode |
+| --- | --- | --- |
+| Check connected aliases and local enrollment | `list_accounts` | Both |
+| Search with Gmail queries and read messages | `search_messages`, `get_message` | Both |
+| Look up existing labels | `list_labels` | Both |
+| Create plain-text drafts in the selected mailbox | `create_draft` | Both |
+| Send an existing draft | `send_draft` | Full |
+| Apply or remove existing labels | `modify_message_labels` | Full |
+
+Every tool takes an explicit `account` alias, such as `personal` or `work`.
+Aliases refer to separately enrolled mailboxes. Forwarded addresses are read
+through their destination mailbox; forwarding alone does not enable sending
+from those addresses.
+
+After connecting, try:
+
+> Search `work` for unread messages from the past week and summarize the ones
+> that need a reply.
+
+> In `personal`, draft an email to friend@example.com suggesting lunch on Friday.
+> Save it as a draft. Do not send it.
+
+> [!IMPORTANT]
+> Drafts mode omits the sending and label-modification tools. Google's
+> `gmail.compose` scope still includes sending permission at the Google level.
+> In full mode, the client must obtain your approval to send a specific draft;
+> the server does not provide a separate human-approval screen for each send.
+
+## How it works
+
+```mermaid
+flowchart LR
+    client["Claude or Codex"] -->|HTTPS| tunnel["Cloudflare Tunnel"]
+    tunnel -->|Loopback HTTP| server["Gmail MCP · /mcp<br/>Owner-only OAuth + PKCE"]
+    server -->|"account: personal"| personal["Personal Gmail"]
+    server -->|"account: work"| work["Work Gmail"]
+```
+
+The server uses Streamable HTTP. Google authorization enrolls each mailbox;
+a separate OAuth consent flow lets Claude or Codex use those enrolled accounts.
+Credentials and authorization state live in encrypted SQLite storage on your
+server. The service runs as a dedicated non-root user under systemd.
+
+Email content is untrusted input. Message bodies are capped at 60,000 characters
+with explicit truncation indicators. Plain text is preferred; HTML-only messages
+return labelled HTML text. See the [security policy](SECURITY.md) for the trust
+boundaries, logging rules, and backup limitations.
 
 ## Setup
 
-Start with the [step-by-step setup guide](docs/setup.md), including the
-information-only bootstrap server needed before Google OAuth enrollment.
-The overview below is a reference for returning operators.
+Follow the **[step-by-step setup guide](docs/setup.md)**. It covers:
+
+1. Building the server and configuring mailbox aliases.
+2. Serving the public information pages and connecting your HTTPS hostname.
+3. Creating your Google project and OAuth clients, then enrolling each account.
+4. Installing the service and connecting Claude or Codex.
+
+The information pages must be available before Google OAuth setup. The guide
+uses `npm run start:setup` for this stage; the full server starts after enrollment.
+Enrollment requires a browser on the server or a computer with SSH forwarding.
+Phone-only enrollment is unsupported.
+
+<details>
+<summary>Setup reference for returning operators</summary>
 
 For CLI usage, run `node dist/cli.js --help` after building. Help works before
 configuration or credentials exist.
@@ -76,7 +142,80 @@ Select the expected Google account and approve. Sessions last ten minutes.
 Identity, verified email, state, nonce and PKCE are checked. You can close the
 SSH tunnel after all enrollments succeed.
 
+</details>
+
+## Connect Claude
+
+1. Open **Customize → Connectors → Add → Custom → Web**, sometimes labelled
+   **Add custom connector**.
+2. Enter a name and `https://mcp.example.com/mcp`, replacing the domain with yours.
+3. Choose **Sign in now → Use your own OAuth client**.
+4. Set the client ID to `claude-gmail`. Leave the client secret blank and add no
+   fixed Authorization header.
+5. Connect, sign in as your configured Google owner, approve the account
+   permissions, and enable the connector in the chat menu.
+
+Use the connector client ID above, not a Google OAuth client ID.
+
+<details>
+<summary>OAuth behavior, session lifetime, and verification</summary>
+
+This is the connector's OAuth client, not either Google client ID. It uses code
+flow with mandatory PKCE S256 and its registered callback
+`https://claude.ai/api/mcp/auth_callback`. Dynamic registration and published
+client identity are not enabled. Tokens require the configured owner, resource,
+scope and an active grant. Refresh tokens rotate; replay revokes their grant.
+Connector grants expire 30 days after creation. Refreshing tokens does not extend
+that grant: reconnect and approve again when it expires. This is separate from
+Google mailbox enrollment; working Gmail grants do not need re-enrollment just
+because connector consent expires.
+
+Verify in Claude: call `list_accounts` with a known alias, search every alias,
+and create a clearly marked draft. Never send during validation. Local Inspector
+success does not prove the production Google-to-Claude OAuth flow.
+
+References: [Claude connectors](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp),
+[Google audience](https://support.google.com/cloud/answer/15549945),
+[Google clients](https://support.google.com/cloud/answer/15549257).
+
+</details>
+
+## Connect Codex
+
+The separate public OAuth client `codex-gmail` uses the same owner-only Google
+login and PKCE checks. Add the following to `~/.codex/config.toml`, substituting
+your domain. Preserve existing settings:
+
+```toml
+[mcp_servers.gmail]
+url = "https://mcp.example.com/mcp"
+scopes = ["mcp", "offline_access"]
+
+[mcp_servers.gmail.oauth]
+client_id = "codex-gmail"
+callback_url = "http://127.0.0.1:18989/callback"
+callback_port = 18989
+```
+
+Run `codex mcp login gmail`. For headless login, use
+`codex mcp login gmail --no-browser` and follow its callback instructions.
+Keep authorization codes and callback URLs out of chat and logs. Alternatively,
+forward port 18989 over SSH from the browser's computer to the Codex host.
+Restart your Codex session after setup and verify `list_accounts` and a search.
+No Google Console changes or mailbox re-enrollment are needed. The native
+client accepts loopback callback ports according to RFC 8252; the callback host
+and path remain restricted. `codex mcp logout gmail` removes local authorization.
+Server-side `revoke-all` revokes both Claude and Codex access.
+
+Reference: [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+
 ## Deployment
+
+Use the **[install, update, and rollback guide](docs/operations.md)** for copyable
+commands. The supported deployment uses systemd and a Cloudflare tunnel.
+
+<details>
+<summary>Service layout, permissions, and networking</summary>
 
 Review [install.sh](deploy/install.sh), then run it as root with four arguments:
 built checkout, Node 24 installation directory, private config directory and
@@ -103,7 +242,22 @@ requires no new inbound ports. On a shared host, preserve existing services,
 LAN and VPN access. Preserving existing public-port exceptions does not establish
 an exact 22/80/443-only ingress policy; audit that separately.
 
+</details>
+
 ## Operations
+
+After installation, use `sudo gmail-mcp-admin status` to inspect enrollment.
+Use the installed admin wrapper so changes affect the live service's database.
+
+| Task | Reference |
+| --- | --- |
+| First installation | [Install the service](docs/operations.md#first-installation) |
+| Update or recover an interrupted update | [Update and rollback](docs/operations.md#code-only-update) |
+| Check a deployment | [Verification steps](docs/operations.md#verify-after-install-or-update) |
+| Report a vulnerability privately | [Security policy](SECURITY.md#reporting-a-vulnerability) |
+
+<details>
+<summary>Add or remove accounts, re-authenticate, revoke access, and rotate secrets</summary>
 
 Use `sudo gmail-mcp-admin status` after installation. The wrapper selects the
 service's config, key and database. `status` and the `list_accounts` tool inspect
@@ -164,61 +318,7 @@ Logs contain fixed event names, not request URLs, subjects, bodies or tokens.
 Avoid proxy access logs, HTTP debug tracing, crash dumps and shell tracing for
 secret operations. Check `journalctl -u gmail-mcp` for startup/failure events.
 
-## Connect Claude
-
-Open **Customize → Connectors → Add → Custom → Web**. Some versions call this
-**Add custom connector**. Enter a name and `https://mcp.example.com/mcp` with your
-real domain. Continue with **Sign in now** and **Use your own OAuth client**.
-Set client ID to **`claude-gmail`**, leave client secret blank, and add no fixed
-Authorization header. Add/connect, sign in as the configured Google owner,
-and approve the connector's account permissions. Enable it in the chat menu.
-
-This is the connector's OAuth client, not either Google client ID. It uses code
-flow with mandatory PKCE S256 and its registered callback
-`https://claude.ai/api/mcp/auth_callback`. Dynamic registration and published
-client identity are not enabled. Tokens require the configured owner, resource,
-scope and an active grant. Refresh tokens rotate; replay revokes their grant.
-Connector grants expire 30 days after creation. Refreshing tokens does not extend
-that grant: reconnect and approve again when it expires. This is separate from
-Google mailbox enrollment; working Gmail grants do not need re-enrollment just
-because connector consent expires.
-
-Verify in Claude: call `list_accounts` with a known alias, search every alias,
-and create a clearly marked draft. Never send during validation. Local Inspector
-success does not prove the production Google-to-Claude OAuth flow.
-
-References: [Claude connectors](https://support.claude.com/en/articles/11175166-get-started-with-custom-connectors-using-remote-mcp),
-[Google audience](https://support.google.com/cloud/answer/15549945),
-[Google clients](https://support.google.com/cloud/answer/15549257).
-
-## Connect Codex
-
-The separate public OAuth client `codex-gmail` uses the same owner-only Google
-login and PKCE checks. Add the following to `~/.codex/config.toml`, substituting
-your domain. Preserve existing settings:
-
-```toml
-[mcp_servers.gmail]
-url = "https://mcp.example.com/mcp"
-scopes = ["mcp", "offline_access"]
-
-[mcp_servers.gmail.oauth]
-client_id = "codex-gmail"
-callback_url = "http://127.0.0.1:18989/callback"
-callback_port = 18989
-```
-
-Run `codex mcp login gmail`. For headless login, use
-`codex mcp login gmail --no-browser` and follow its callback instructions.
-Keep authorization codes and callback URLs out of chat and logs. Alternatively,
-forward port 18989 over SSH from the browser's computer to the Codex host.
-Restart your Codex session after setup and verify `list_accounts` and a search.
-No Google Console changes or mailbox re-enrollment are needed. The native
-client accepts loopback callback ports according to RFC 8252; the callback host
-and path remain restricted. `codex mcp logout gmail` removes local authorization.
-Server-side `revoke-all` revokes both Claude and Codex access.
-
-Reference: [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+</details>
 
 ## Contributing and release hygiene
 
@@ -230,3 +330,7 @@ Run `npm test`, `npm run check`, and `npm run build` before submitting a change.
 See [SECURITY.md](SECURITY.md) for private reporting; use public issues only for
 non-sensitive bugs and feature requests. `private: true` in package.json prevents
 accidental npm publication; it does not restrict the MIT source license.
+
+## License
+
+[MIT](LICENSE) © Alex Neamtu.
