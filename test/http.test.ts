@@ -26,6 +26,7 @@ test('MCP requires authentication, rejects hostile hosts and exposes OAuth disco
   const hostile=await new Promise<number|undefined>(resolve=>{const req=request(origin+'/mcp',{headers:{Host:'evil.example'}},res=>{res.resume();resolve(res.statusCode);});req.end();});
   assert.equal(hostile,400);
   assert.equal((await fetch(origin+'/mcp',{method:'POST',headers:{Origin:'https://evil.example','Content-Type':'application/json'},body:'{}'})).status,403);
+  assert.equal((await fetch(origin+'/mcp',{method:'POST',headers:{Origin:'null','Content-Type':'application/json'},body:'{}'})).status,403);
   const prm=await(await fetch(origin+'/.well-known/oauth-protected-resource/mcp')).json();
   assert.equal(prm.resource,origin+'/mcp');assert.deepEqual(prm.authorization_servers,[origin]);
   const as=await(await fetch(origin+'/.well-known/oauth-authorization-server')).json();
@@ -64,9 +65,14 @@ test('owner-only browser flow issues audience-bound tokens, serves MCP, and reje
    if(location?.startsWith('https://claude.ai/'))return new URL(location).searchParams.get('code');
    if(location){response=await browser(location);continue;}
    const html=await response.text();assert.equal(response.status,200,html);
+   assert.equal(response.headers.get('referrer-policy'),'same-origin','Consent form must preserve its same-origin POST Origin');
    const csrf=html.match(/name="csrf" value="([^"]+)"/)?.[1];const action=html.match(/action="([^"]+)"/)?.[1];
    assert.ok(csrf&&action,html);
-   response=await browser(action,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf,decision:'allow'})});
+   const denied=await browser(action,{method:'POST',headers:{Origin:'null','Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf,decision:'allow'})});
+   assert.equal(denied.status,403);
+   const forged=await browser(action,{method:'POST',headers:{Origin:origin,'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf:'incorrect',decision:'allow'})});
+   assert.equal(forged.status,403);
+   response=await browser(action,{method:'POST',headers:{Origin:origin,'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({csrf,decision:'allow'})});
   }
   throw new Error('OAuth flow did not complete');
  }
