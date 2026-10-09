@@ -208,9 +208,33 @@ Restart your Codex session after setup and verify `list_accounts` and a search.
 No Google Console changes or mailbox re-enrollment are needed. The native
 client accepts loopback callback ports according to RFC 8252; the callback host
 and path remain restricted. `codex mcp logout gmail` removes local authorization.
-Server-side `revoke-all` revokes both Claude and Codex access.
+Server-side `revoke-all` revokes access for every connector client.
 
 Reference: [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp?surface=cli).
+
+## Connect Claude Code
+
+Claude Code uses a separate public client, `claude-code-gmail`, with the exact
+callback `http://localhost:18989/callback`. It requires owner login and PKCE;
+there is no client secret. Do not reuse the Codex client ID: its callback uses
+`127.0.0.1`, which is a different OAuth redirect URI.
+
+Add the server in your personal Claude Code profile, substituting your domain:
+
+```bash
+claude mcp add --transport http --scope user \
+  --client-id claude-code-gmail --callback-port 18989 \
+  gmail-personal https://mcp.example.com/mcp
+```
+
+If `gmail-personal` already exists, update its `oauth.clientId` to
+`claude-code-gmail` and `oauth.callbackPort` to `18989` in the configuration
+reported by `claude mcp get gmail-personal`. Preserve its URL and other entries.
+Restart Claude Code, then use `/mcp` to authenticate. If the final callback page
+cannot load, paste its full URL into Claude Code's callback prompt, not a chat.
+No Google Console changes or mailbox re-enrollment are needed.
+
+Reference: [Claude Code MCP OAuth](https://code.claude.com/docs/en/mcp#use-pre-configured-oauth-credentials).
 
 ## Deployment
 
