@@ -33,7 +33,12 @@ test('MCP requires authentication, rejects hostile hosts and exposes OAuth disco
   const as=await(await fetch(origin+'/.well-known/oauth-authorization-server')).json();
   assert.equal(as.issuer,origin);assert.ok(as.code_challenge_methods_supported.includes('S256'));
   assert.equal(as.registration_endpoint,undefined);
-  for(const [clientId,redirect] of [['codex-gmail','https://evil.example/callback'],['codex-gmail','http://127.0.0.1:18989/wrong'],['claude-gmail','http://127.0.0.1:18989/callback']]){
+  for(const [clientId,redirect] of [
+   ['codex-gmail','https://evil.example/callback'],['codex-gmail','http://127.0.0.1:18989/wrong'],['claude-gmail','http://127.0.0.1:18989/callback'],
+   ['codex-gmail','http://localhost:18989/callback'],
+   ['claude-code-gmail','https://evil.example/callback'],['claude-code-gmail','http://localhost:18989/wrong'],
+   ['claude-code-gmail','http://localhost:18990/callback'],['claude-code-gmail','http://127.0.0.1:18989/callback'],
+  ]){
    const rejected=await fetch(origin+'/authorize?'+new URLSearchParams({client_id:clientId!,redirect_uri:redirect!,response_type:'code',scope:'mcp',code_challenge:'x'.repeat(43),code_challenge_method:'S256'}),{redirect:'manual'});
    assert.equal(rejected.status,400);assert.equal(rejected.headers.get('location'),null);
   }
@@ -46,6 +51,7 @@ test('MCP requires authentication, rejects hostile hosts and exposes OAuth disco
 for(const client of [
  {id:'claude-gmail',name:'Claude',callback:'https://claude.ai/api/mcp/auth_callback'},
  {id:'codex-gmail',name:'Codex',callback:'http://127.0.0.1:18989/callback'},
+ {id:'claude-code-gmail',name:'Claude Code',callback:'http://localhost:18989/callback'},
 ]) test(`${client.name}: owner-only browser flow issues audience-bound tokens, serves MCP, and rejects refresh replay`,async()=>{
  const {createHash}=await import('node:crypto');
  const dir=mkdtempSync(join(tmpdir(),'gmail-oauth-'));const store=new Store(dir,randomBytes(32));

@@ -17,6 +17,8 @@ export const CLIENT_ID='claude-gmail';
 export const CLAUDE_CALLBACK='https://claude.ai/api/mcp/auth_callback';
 export const CODEX_CLIENT_ID='codex-gmail';
 export const CODEX_CALLBACK='http://127.0.0.1:18989/callback';
+export const CLAUDE_CODE_CLIENT_ID='claude-code-gmail';
+export const CLAUDE_CODE_CALLBACK='http://localhost:18989/callback';
 
 export function initializeProviderSecrets(store:Store):void {
   if(!store.get('Settings','provider')){
@@ -51,6 +53,9 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     clients:[{client_id:CLIENT_ID,client_name:'Personal Gmail connector',redirect_uris:[CLAUDE_CALLBACK],
       response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
       {client_id:CODEX_CLIENT_ID,client_name:'Codex Gmail connector',application_type:'native',redirect_uris:[CODEX_CALLBACK],
+        response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
+      // Claude Code uses localhost; web registration enforces its exact port and path.
+      {client_id:CLAUDE_CODE_CLIENT_ID,client_name:'Claude Code Gmail connector',application_type:'web',redirect_uris:[CLAUDE_CODE_CALLBACK],
         response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'}],
     scopes:['openid','offline_access','mcp'],pkce:{required:()=>true},rotateRefreshToken:true,
     issueRefreshToken:()=>true,
@@ -118,7 +123,7 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     }
     if(interaction.prompt.name!=='consent'||interaction.session?.accountId!==currentOwner())return void res.sendStatus(403);
     const csrf=random();store.put('Consent',interaction.uid,{csrf},600);
-    const clientName=interaction.params.client_id===CODEX_CLIENT_ID?'Codex':'Claude';
+    const clientName=interaction.params.client_id===CODEX_CLIENT_ID?'Codex':interaction.params.client_id===CLAUDE_CODE_CLIENT_ID?'Claude Code':'Claude';
     // The provider has already validated this registered client's exact callback (native loopback ports may vary).
     const callback=String(interaction.params.redirect_uri);
     // no-referrer makes browser form POSTs send Origin: null, failing the Origin guard.
