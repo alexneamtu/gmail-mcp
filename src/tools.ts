@@ -108,8 +108,8 @@ export class MailTools {
     const input=tool.schema.parse(args);
     try{return await tool.run(input);}catch(error){throw error instanceof OperationError?error:new OperationError('operation_failed');}
   }
-  server():McpServer {
-    const server=new McpServer({name:'gmail-mcp',version:'0.1.0'});
+  server(instructions?:string):McpServer {
+    const server=new McpServer({name:'gmail-mcp',version:'0.1.0'},{instructions});
     for(const tool of this.definitions)server.registerTool(tool.name,{description:tool.description,inputSchema:tool.schema,
       annotations:{readOnlyHint:!tool.write,destructiveHint:tool.name==='send_draft',idempotentHint:!tool.write,openWorldHint:tool.name!=='list_accounts'}},async args=>{
         try{
