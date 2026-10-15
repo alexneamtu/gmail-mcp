@@ -1,6 +1,7 @@
 import {z} from 'zod';
 
 const messages={
+  inspection_only:'Schema inspection only. No accounts are connected and all tool calls are disabled. Complete the documented HTTP server setup for Gmail access.',
   invalid_arguments:'Check the command or tool arguments. Use --help for administration commands.',
   reauth_required:'This account requires enrollment. Run gmail-mcp-admin enroll <alias> with the selected account.',
   account_disabled:'This account is disabled pending removal. Retry remove <alias>, or deliberately re-enroll it to restore access.',

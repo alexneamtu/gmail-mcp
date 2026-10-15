@@ -11,6 +11,7 @@
     "check": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
     "start": "node dist/main.js",
+    "start:inspection": "node dist/inspection-main.js",
     "admin": "tsx src/cli.ts",
     "start:setup": "node dist/public-main.js"
   },

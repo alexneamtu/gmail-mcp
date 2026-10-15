@@ -73,6 +73,31 @@ boundaries, logging rules, and backup limitations.
 
 ## Setup
 
+### Schema inspection for directories
+
+Glama and other stdio inspectors can inspect the tool catalog without private
+configuration or Google credentials:
+
+```sh
+npm ci --ignore-scripts
+npm run build
+node dist/inspection-main.js
+```
+
+This entrypoint exposes the same nine tool definitions as full access mode. The
+`inspection` account alias is a placeholder, not an enrolled mailbox. Every tool
+call returns an `inspection_only` error, including `list_accounts`. It reads no
+private configuration or storage and makes no Gmail requests. Inspection does
+not verify Google authentication, mailbox access, or functional hosted operation.
+
+For Glama's Dockerfile configuration, use Node 24, build steps
+`["npm ci --ignore-scripts", "npm run build"]`, and CMD arguments
+`["mcp-proxy", "--", "node", "dist/inspection-main.js"]`. Leave environment
+variables and placeholder parameters empty. Run Node directly to keep package
+manager banners off stdout. No credentials belong in this inspection build.
+
+### Connect real mailboxes
+
 Follow the **[step-by-step setup guide](docs/setup.md)**. It covers:
 
 1. Building the server and configuring mailbox aliases.
