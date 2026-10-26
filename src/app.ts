@@ -59,6 +59,8 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
         response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'}],
     scopes:['openid','offline_access','mcp'],pkce:{required:()=>true},rotateRefreshToken:true,
     issueRefreshToken:()=>true,
+    // Claude Code never requests offline_access; without this its refresh token dies with the one-hour login session.
+    expiresWithSession:async()=>false,
     ttl:{AccessToken:300,AuthorizationCode:60,RefreshToken:30*86400,Session:3600,Interaction:600,Grant:30*86400},
     features:{devInteractions:{enabled:false},registration:{enabled:false},revocation:{enabled:true},userinfo:{enabled:false},
       resourceIndicators:{enabled:true,defaultResource:()=>resource,useGrantedResource:()=>true,

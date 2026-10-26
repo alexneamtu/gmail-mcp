@@ -70,7 +70,7 @@ for(const client of [
   return response;
  }
  const verifier=randomBytes(32).toString('base64url');
- const authorize=()=>'/authorize?'+new URLSearchParams({client_id:client.id,redirect_uri:client.callback,response_type:'code',scope:'mcp offline_access',resource:origin+'/mcp',state:'client-state',code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256'});
+ const authorize=()=>'/authorize?'+new URLSearchParams({client_id:client.id,redirect_uri:client.callback,response_type:'code',scope:'mcp',resource:origin+'/mcp',state:'client-state',code_challenge:createHash('sha256').update(verifier).digest('base64url'),code_challenge_method:'S256'});
  async function login(code:string){
   let response=await browser(authorize());assert.equal(response.status,303);
   response=await browser(response.headers.get('location')!);assert.equal(response.status,303);
@@ -121,6 +121,8 @@ for(const client of [
   assert.match(inspected.stdout,/create_draft/);
   const draft=await(await mcp(tokens.access_token,'tools/call',{name:'create_draft',arguments:{account:'personal',to:['recipient@example.com'],subject:'Synthetic test',body:'Do not send'}})).json();
   assert.match(JSON.stringify(draft),/synthetic-draft/);
+  // Clients such as Claude Code request only mcp; refresh must survive the end of the one-hour login session.
+  for(const {id} of store.all('Session'))store.delete('Session',id);
   const rotated=await token({grant_type:'refresh_token',refresh_token:tokens.refresh_token});assert.equal(rotated.status,200);
   const next=await rotated.json();assert.notEqual(next.refresh_token,tokens.refresh_token);
   const replay=await token({grant_type:'refresh_token',refresh_token:tokens.refresh_token});assert.equal(replay.status,400);
