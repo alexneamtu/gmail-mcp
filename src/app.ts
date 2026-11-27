@@ -1,6 +1,7 @@
 import express,{type Request,type Response,type NextFunction} from 'express';
 import Provider,{errors,type Configuration} from 'oidc-provider';
 import {generateKeyPairSync,randomBytes,createHash,timingSafeEqual} from 'node:crypto';
+import {parse} from 'node:querystring';
 import {NodeStreamableHTTPServerTransport} from '@modelcontextprotocol/node';
 import {Store} from './store.js';
 import type {Config} from './config.js';
@@ -10,6 +11,9 @@ import {publicPages} from './public-pages.js';
 import {accountStatus} from './accounts.js';
 import {consentPage,authorizationError} from './ui.js';
 
+// Claude Code refreshes once 300 s remain; a longer lifetime stops it rotating on every call.
+const ACCESS_TOKEN_TTL=3600;
+const REFRESH_GRACE_MS=60_000;
 const random=()=>randomBytes(32).toString('base64url');
 const digest=(s:string)=>createHash('sha256').update(s).digest('base64url');
 const same=(a:unknown,b:unknown)=>typeof a==='string'&&typeof b==='string'&&Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
@@ -19,6 +23,16 @@ export const CODEX_CLIENT_ID='codex-gmail';
 export const CODEX_CALLBACK='http://127.0.0.1:18989/callback';
 export const CLAUDE_CODE_CLIENT_ID='claude-code-gmail';
 export const CLAUDE_CODE_CALLBACK='http://localhost:18989/callback';
+export const OPENCODE_CLIENT_ID='opencode-gmail';
+export const OPENCODE_CALLBACK='http://127.0.0.1:19876/mcp/oauth/callback';
+export const VSCODE_CLIENT_ID='vscode-gmail';
+export const VSCODE_CALLBACK='http://127.0.0.1:33418';
+export const VSCODE_WEB_CALLBACK='https://vscode.dev/redirect';
+export const CHATGPT_CLIENT_ID='chatgpt-gmail';
+export const CHATGPT_CALLBACK='https://chatgpt.com/connector_platform_oauth_redirect';
+export const GROKBOT_CLIENT_ID='grokbot-gmail';
+export const GROKBOT_CALLBACK='https://www.cursor.com/agents/mcp/oauth/callback';
+export const GROKBOT_LOCAL_CALLBACK='http://localhost:8787/callback';
 
 export function initializeProviderSecrets(store:Store):void {
   if(!store.get('Settings','provider')){
@@ -43,7 +57,7 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     async consume(id:string){
       const record=store.get(this.model,id);
       if(!store.consume(this.model,id)){
-        if(record?.grantId)store.revokeGrant(record.grantId);
+        if(record?.grantId){console.warn(`event=grant_revoked route=consume model=${this.model} client=${record.clientId??'unknown'}`);store.revokeGrant(record.grantId);}
         throw new errors.InvalidGrant('Credential unavailable or already used');
       }
     }
@@ -56,15 +70,26 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
         response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
       // Claude Code uses localhost; web registration enforces its exact port and path.
       {client_id:CLAUDE_CODE_CLIENT_ID,client_name:'Claude Code Gmail connector',application_type:'web',redirect_uris:[CLAUDE_CODE_CALLBACK],
+        response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
+      // OpenCode's fixed callback uses web registration to enforce the exact port.
+      {client_id:OPENCODE_CLIENT_ID,client_name:'OpenCode Gmail connector',application_type:'web',redirect_uris:[OPENCODE_CALLBACK],
+        response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
+      // VS Code may select another available native loopback port.
+      {client_id:VSCODE_CLIENT_ID,client_name:'VS Code Gmail connector',application_type:'native',redirect_uris:[VSCODE_CALLBACK,VSCODE_WEB_CALLBACK],
+        response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
+      {client_id:CHATGPT_CLIENT_ID,client_name:'ChatGPT Gmail connector',application_type:'web',redirect_uris:[CHATGPT_CALLBACK],
+        response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
+      {client_id:GROKBOT_CLIENT_ID,client_name:'Grok Bot Gmail connector',application_type:'web',redirect_uris:[GROKBOT_CALLBACK,GROKBOT_LOCAL_CALLBACK],
         response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'}],
-    scopes:['openid','offline_access','mcp'],pkce:{required:()=>true},rotateRefreshToken:true,
+    // Refresh tokens are unconditional; advertising offline_access makes some clients refresh an ungranted scope.
+    scopes:['openid','mcp'],pkce:{required:()=>true},rotateRefreshToken:true,
     issueRefreshToken:()=>true,
     // Claude Code never requests offline_access; without this its refresh token dies with the one-hour login session.
     expiresWithSession:async()=>false,
-    ttl:{AccessToken:300,AuthorizationCode:60,RefreshToken:30*86400,Session:3600,Interaction:600,Grant:30*86400},
+    ttl:{AccessToken:ACCESS_TOKEN_TTL,AuthorizationCode:60,RefreshToken:30*86400,Session:3600,Interaction:600,Grant:30*86400},
     features:{devInteractions:{enabled:false},registration:{enabled:false},revocation:{enabled:true},userinfo:{enabled:false},
       resourceIndicators:{enabled:true,defaultResource:()=>resource,useGrantedResource:()=>true,
-        getResourceServerInfo:(_ctx,indicator)=>{if(indicator!==resource)throw new errors.InvalidTarget();return {scope:'mcp',audience:resource,accessTokenFormat:'opaque',accessTokenTTL:300};}}},
+        getResourceServerInfo:(_ctx,indicator)=>{if(indicator!==resource)throw new errors.InvalidTarget();return {scope:'mcp',audience:resource,accessTokenFormat:'opaque',accessTokenTTL:ACCESS_TOKEN_TTL};}}},
     routes:{authorization:'/authorize',token:'/token',revocation:'/revoke',jwks:'/jwks'},
     interactions:{url:(_ctx,interaction)=>`/interaction/${interaction.uid}`},
     findAccount:(_ctx,id)=>id===currentOwner()?{accountId:id,async claims(){return {sub:id};}}:undefined,
@@ -72,6 +97,36 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
   };
   const provider=new Provider(config.origin,configuration);provider.proxy=true;
   provider.on('server_error',()=>console.error('event=oidc_server_error'));
+  const grantLog=(grantType:unknown,client:unknown,outcome:string)=>console.info(`event=token_grant grant_type=${grantType??'unknown'} client=${client??'unknown'} outcome=${outcome}`);
+  provider.on('grant.success',ctx=>grantLog(ctx.oidc.params?.grant_type,ctx.oidc.client?.clientId,'success'));
+  provider.on('grant.error',(ctx,err:any)=>grantLog(ctx.oidc.params?.grant_type,ctx.oidc.client?.clientId,err?.error??'error'));
+  provider.on('grant.revoked',ctx=>console.warn(`event=grant_revoked route=${ctx.oidc.route} client=${ctx.oidc.client?.clientId??'unknown'}`));
+  // Concurrent sessions sharing one refresh token can present it again just after another rotated it.
+  // An identical request within the grace window gets the original answer (one token lineage); later reuse still revokes the grant.
+  const rotations=new Map<string,{at:number,result:Promise<any>}>();
+  provider.use(async(ctx,next)=>{
+    if(ctx.method!=='POST'||ctx.path!=='/token'||!ctx.is('application/x-www-form-urlencoded'))return next();
+    const chunks:Buffer[]=[];let size=0;
+    for await(const chunk of ctx.req){size+=chunk.length;if(size>56*1024)ctx.throw(413);chunks.push(chunk);}
+    const raw=Buffer.concat(chunks).toString();const body=parse(raw);(ctx.request as any).body=body;
+    if(body.grant_type!=='refresh_token'||typeof body.refresh_token!=='string')return next();
+    const key=digest(raw+'\n'+(ctx.get('authorization')));const now=Date.now();
+    for(const [k,v] of rotations)if(now-v.at>=REFRESH_GRACE_MS)rotations.delete(k);
+    const earlier=rotations.get(key);
+    if(earlier){
+      const result=await earlier.result;
+      const successor=result&&await provider.RefreshToken.find(result.refresh_token);
+      if(successor&&!successor.consumed){ctx.status=200;ctx.body=result;grantLog('refresh_token',body.client_id,'grace_replay');return;}
+      return next();
+    }
+    let settle!:(result:any)=>void;
+    rotations.set(key,{at:now,result:new Promise(r=>settle=r)});
+    try{await next();}finally{
+      const result=ctx.status===200&&(ctx.body as any)?.refresh_token?ctx.body:undefined;
+      if(!result)rotations.delete(key);
+      settle(result);
+    }
+  });
   const app=express();app.disable('x-powered-by');app.set('trust proxy','loopback');
   const loginCookie=secure?'__Host-gmail-login':'gmail-login';
   const cookie=(req:Request)=>req.headers.cookie?.split(';').map(x=>x.trim()).find(x=>x.startsWith(loginCookie+'='))?.slice(loginCookie.length+1);
@@ -125,7 +180,8 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     }
     if(interaction.prompt.name!=='consent'||interaction.session?.accountId!==currentOwner())return void res.sendStatus(403);
     const csrf=random();store.put('Consent',interaction.uid,{csrf},600);
-    const clientName=interaction.params.client_id===CODEX_CLIENT_ID?'Codex':interaction.params.client_id===CLAUDE_CODE_CLIENT_ID?'Claude Code':'Claude';
+    const clientNames:Record<string,string>={[CLIENT_ID]:'Claude',[CODEX_CLIENT_ID]:'Codex',[CLAUDE_CODE_CLIENT_ID]:'Claude Code',[OPENCODE_CLIENT_ID]:'OpenCode',[VSCODE_CLIENT_ID]:'VS Code',[CHATGPT_CLIENT_ID]:'ChatGPT',[GROKBOT_CLIENT_ID]:'Grok Bot'};
+    const clientName=clientNames[String(interaction.params.client_id)]!;
     // The provider has already validated this registered client's exact callback (native loopback ports may vary).
     const callback=String(interaction.params.redirect_uri);
     // no-referrer makes browser form POSTs send Origin: null, failing the Origin guard.
