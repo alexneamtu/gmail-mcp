@@ -52,7 +52,7 @@ for(const client of [
  {id:'claude-gmail',name:'Claude',callback:'https://claude.ai/api/mcp/auth_callback'},
  {id:'codex-gmail',name:'Codex',callback:'http://127.0.0.1:18989/callback'},
  {id:'claude-code-gmail',name:'Claude Code',callback:'http://localhost:18989/callback'},
-]) test(`${client.name}: owner-only browser flow issues audience-bound tokens, serves MCP, and rejects refresh replay`,async()=>{
+]) test(`${client.name}: owner-only browser flow issues audience-bound tokens, serves MCP, and tolerates refresh replay only briefly`,async t=>{
  const {createHash}=await import('node:crypto');
  const dir=mkdtempSync(join(tmpdir(),'gmail-oauth-'));const store=new Store(dir,randomBytes(32));
  store.put('Settings','owner',{email:'owner@example.com',sub:'owner-sub'});initializeProviderSecrets(store);
@@ -124,9 +124,20 @@ for(const client of [
   // Clients such as Claude Code request only mcp; refresh must survive the end of the one-hour login session.
   for(const {id} of store.all('Session'))store.delete('Session',id);
   const rotated=await token({grant_type:'refresh_token',refresh_token:tokens.refresh_token});assert.equal(rotated.status,200);
-  const next=await rotated.json();assert.notEqual(next.refresh_token,tokens.refresh_token);
-  const replay=await token({grant_type:'refresh_token',refresh_token:tokens.refresh_token});assert.equal(replay.status,400);
-  assert.equal((await mcp(next.access_token,'tools/list')).status,401);
+  const next=await rotated.json();assert.notEqual(next.refresh_token,tokens.refresh_token);assert.equal(next.expires_in,3600);
+  // Concurrent Claude Code sessions share one token; a just-rotated token presented again gets the same successor.
+  const replay=await token({grant_type:'refresh_token',refresh_token:tokens.refresh_token});assert.equal(replay.status,200);
+  assert.deepEqual(await replay.json(),next);
+  const racing=await Promise.all([1,2].map(()=>token({grant_type:'refresh_token',refresh_token:next.refresh_token})));
+  assert.deepEqual(racing.map(r=>r.status),[200,200]);
+  const [first,second]=await Promise.all(racing.map(r=>r.json()));assert.deepEqual(first,second);
+  assert.equal((await mcp(first.access_token,'tools/list')).status,200);
+  // Outside the grace window reuse still revokes the whole grant.
+  const now=Date.now();t.mock.method(Date,'now',()=>now+61_000);
+  const late=await token({grant_type:'refresh_token',refresh_token:next.refresh_token});assert.equal(late.status,400);
+  assert.equal((await late.json()).error,'invalid_grant');
+  assert.equal((await mcp(first.access_token,'tools/list')).status,401);
+  t.mock.restoreAll();
   cookies.clear();const concurrentCode=await login('owner');assert.ok(concurrentCode);
   const redeem=()=>token({grant_type:'authorization_code',code:concurrentCode,code_verifier:verifier,redirect_uri:client.callback});
   const exchanges=await Promise.all([redeem(),redeem()]);
