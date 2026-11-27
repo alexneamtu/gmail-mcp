@@ -217,7 +217,7 @@ your domain. Preserve existing settings:
 ```toml
 [mcp_servers.gmail]
 url = "https://mcp.example.com/mcp"
-scopes = ["mcp", "offline_access"]
+scopes = ["mcp"]
 
 [mcp_servers.gmail.oauth]
 client_id = "codex-gmail"

@@ -23,6 +23,16 @@ export const CODEX_CLIENT_ID='codex-gmail';
 export const CODEX_CALLBACK='http://127.0.0.1:18989/callback';
 export const CLAUDE_CODE_CLIENT_ID='claude-code-gmail';
 export const CLAUDE_CODE_CALLBACK='http://localhost:18989/callback';
+export const OPENCODE_CLIENT_ID='opencode-gmail';
+export const OPENCODE_CALLBACK='http://127.0.0.1:19876/mcp/oauth/callback';
+export const VSCODE_CLIENT_ID='vscode-gmail';
+export const VSCODE_CALLBACK='http://127.0.0.1:33418';
+export const VSCODE_WEB_CALLBACK='https://vscode.dev/redirect';
+export const CHATGPT_CLIENT_ID='chatgpt-gmail';
+export const CHATGPT_CALLBACK='https://chatgpt.com/connector_platform_oauth_redirect';
+export const GROKBOT_CLIENT_ID='grokbot-gmail';
+export const GROKBOT_CALLBACK='https://www.cursor.com/agents/mcp/oauth/callback';
+export const GROKBOT_LOCAL_CALLBACK='http://localhost:8787/callback';
 
 export function initializeProviderSecrets(store:Store):void {
   if(!store.get('Settings','provider')){
@@ -60,8 +70,19 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
         response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
       // Claude Code uses localhost; web registration enforces its exact port and path.
       {client_id:CLAUDE_CODE_CLIENT_ID,client_name:'Claude Code Gmail connector',application_type:'web',redirect_uris:[CLAUDE_CODE_CALLBACK],
+        response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
+      // OpenCode's fixed callback uses web registration to enforce the exact port.
+      {client_id:OPENCODE_CLIENT_ID,client_name:'OpenCode Gmail connector',application_type:'web',redirect_uris:[OPENCODE_CALLBACK],
+        response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
+      // VS Code may select another available native loopback port.
+      {client_id:VSCODE_CLIENT_ID,client_name:'VS Code Gmail connector',application_type:'native',redirect_uris:[VSCODE_CALLBACK,VSCODE_WEB_CALLBACK],
+        response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
+      {client_id:CHATGPT_CLIENT_ID,client_name:'ChatGPT Gmail connector',application_type:'web',redirect_uris:[CHATGPT_CALLBACK],
+        response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'},
+      {client_id:GROKBOT_CLIENT_ID,client_name:'Grok Bot Gmail connector',application_type:'web',redirect_uris:[GROKBOT_CALLBACK,GROKBOT_LOCAL_CALLBACK],
         response_types:['code'],grant_types:['authorization_code','refresh_token'],token_endpoint_auth_method:'none'}],
-    scopes:['openid','offline_access','mcp'],pkce:{required:()=>true},rotateRefreshToken:true,
+    // Refresh tokens are unconditional; advertising offline_access makes some clients refresh an ungranted scope.
+    scopes:['openid','mcp'],pkce:{required:()=>true},rotateRefreshToken:true,
     issueRefreshToken:()=>true,
     // Claude Code never requests offline_access; without this its refresh token dies with the one-hour login session.
     expiresWithSession:async()=>false,
@@ -159,7 +180,8 @@ export function createApp(config:Config,store:Store,api:GmailApi,identity?:Ident
     }
     if(interaction.prompt.name!=='consent'||interaction.session?.accountId!==currentOwner())return void res.sendStatus(403);
     const csrf=random();store.put('Consent',interaction.uid,{csrf},600);
-    const clientName=interaction.params.client_id===CODEX_CLIENT_ID?'Codex':interaction.params.client_id===CLAUDE_CODE_CLIENT_ID?'Claude Code':'Claude';
+    const clientNames:Record<string,string>={[CLIENT_ID]:'Claude',[CODEX_CLIENT_ID]:'Codex',[CLAUDE_CODE_CLIENT_ID]:'Claude Code',[OPENCODE_CLIENT_ID]:'OpenCode',[VSCODE_CLIENT_ID]:'VS Code',[CHATGPT_CLIENT_ID]:'ChatGPT',[GROKBOT_CLIENT_ID]:'Grok Bot'};
+    const clientName=clientNames[String(interaction.params.client_id)]!;
     // The provider has already validated this registered client's exact callback (native loopback ports may vary).
     const callback=String(interaction.params.redirect_uri);
     // no-referrer makes browser form POSTs send Origin: null, failing the Origin guard.

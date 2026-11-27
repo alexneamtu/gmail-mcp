@@ -52,6 +52,10 @@ for(const client of [
  {id:'claude-gmail',name:'Claude',callback:'https://claude.ai/api/mcp/auth_callback'},
  {id:'codex-gmail',name:'Codex',callback:'http://127.0.0.1:18989/callback'},
  {id:'claude-code-gmail',name:'Claude Code',callback:'http://localhost:18989/callback'},
+ {id:'opencode-gmail',name:'OpenCode',callback:'http://127.0.0.1:19876/mcp/oauth/callback'},
+ {id:'vscode-gmail',name:'VS Code',callback:'http://127.0.0.1:33418'},
+ {id:'chatgpt-gmail',name:'ChatGPT',callback:'https://chatgpt.com/connector_platform_oauth_redirect'},
+ {id:'grokbot-gmail',name:'Grok Bot',callback:'https://www.cursor.com/agents/mcp/oauth/callback'},
 ]) test(`${client.name}: owner-only browser flow issues audience-bound tokens, serves MCP, and tolerates refresh replay only briefly`,async t=>{
  const {createHash}=await import('node:crypto');
  const dir=mkdtempSync(join(tmpdir(),'gmail-oauth-'));const store=new Store(dir,randomBytes(32));
@@ -78,8 +82,8 @@ for(const client of [
   response=await browser('/login/google/callback?'+new URLSearchParams({code,state:google.searchParams.get('state')!}));
   if(code!=='owner'){assert.equal(response.status,403);assert.match(await response.text(),/owner account/i);return undefined;}
   for(let i=0;i<8;i++){
-   const location=response.headers.get('location');
-   if(location?.startsWith(client.callback+'?')){assert.equal(new URL(location).searchParams.get('iss'),origin);return new URL(location).searchParams.get('code');}
+   const location=response.headers.get('location');const target=location?new URL(location,origin):undefined;const expected=new URL(client.callback);
+   if(target&&target.origin+target.pathname===expected.origin+expected.pathname){assert.equal(target.searchParams.get('iss'),origin);return target.searchParams.get('code');}
    if(location){response=await browser(location);continue;}
    const html=await response.text();assert.equal(response.status,200,html);
    assert.equal(response.headers.get('referrer-policy'),'same-origin','Consent form must preserve its same-origin POST Origin');
